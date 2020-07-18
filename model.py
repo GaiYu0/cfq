@@ -97,12 +97,12 @@ class Model(nn.Module):
         ----------
         seq : (n, l)
         n : (n,)
-        n_idx : (n',)
-        idx : (n'',)
+        n_idx : (n.sum(),)
+        idx : (n_idx.sum(),)
         m : (n,)
-        src : (m')
-        dst : (m')
-        rel : (m')
+        src : (m.sum(),)
+        dst : (m.sum(),)
+        rel : (m.sum(),)
         """
         i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
@@ -110,8 +110,11 @@ class Model(nn.Module):
 
         logit = self.ntl(h[src], h[dst])
 
-        ret = {}
+        d = {}
+        eq = rel.eq(logit.max(1)[1])
+        d['acc'] = eq.float().mean()
+        d['emr'] = scatter_min(eq, arange(len(m)).repeat_interleave(m)).eq(1).float().mean()
         if self.training:
-            ret['logp'] = logit.log_softmax(1).gather(rel.unsqueeze(1)).sum() / len(seq)
+            d['logp'] = logit.log_softmax(1).gather(rel.unsqueeze(1)).sum() / len(seq)
 
-        return ret
+        return d
