@@ -1,0 +1,1 @@
+python3 train.py --data /data/yu_gai/cfq/data.npz --split /data/yu_gai/cfq/splits/mcd1.npz --train-batch-size 64 --eval-batch-size 64 --vocab /data/yu_gai/cfq/vocab.pickle --num-workers 0 --seq-ninp 64 --nhead 8 --seq-nhid 64 --seq-nlayer 8 --ntl-ninp 64 --ntl-nhid 64 --dropout 0.1 --optim Adam --lr 1e-4 --num-epochs 10

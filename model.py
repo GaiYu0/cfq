@@ -5,14 +5,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch_scatter import scatter_min, scatter_sum
 
 
-if torch.cuda.is_available():
-    [arange,
-     ones,
-     zeros] = map(partial(device=torch.device('cuda:0')), [torch.arange,
-                                                           torch.ones,
-                                                           torch.zeros])
+device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+[arange,
+ ones,
+ zeros] = map(partial(partial, device=device), [torch.arange,
+                                                torch.ones,
+                                                torch.zeros])
 
 
 class PositionalEncoding(nn.Module):
@@ -33,7 +34,9 @@ class PositionalEncoding(nn.Module):
         self.variable = nn.Parameter(1e-3 * torch.randn(d_model))
 
     def forward(self, x, isvariable, isconcept):
-        x = x + self.variable.where(isvariable, self.concept.where(isconcept, self.pe[:x.size(0), :]))
+        x = x + self.variable.where(isvariable.unsqueeze(2),
+                                    self.concept.where(isconcept.unsqueeze(2),
+                                                       self.pe[:x.size(0), :]))
         return self.dropout(x)
 
 
@@ -50,13 +53,14 @@ class TransformerModel(nn.Module):
 
     def forward(self, src, masks):
         src = self.tok_encoder(src) * math.sqrt(self.ninp)
-        src = self.pos_encoder(src, *masks)
+        src = self.pos_encoder(src, **masks)
         return self.linear(self.transformer_encoder(src))
 
 
 class NeuralTensorLayer(nn.Module):
 
     def __init__(self, ninp, nhid, nrel):
+        super().__init__()
         self.w = nn.Parameter(1e-3 * torch.randn(nrel, nhid, ninp, ninp))
         self.v = nn.Parameter(1e-3 * torch.randn(nrel, nhid, 2 * ninp))
         self.b = nn.Parameter(torch.zeros(nrel, nhid, 1))
@@ -73,8 +77,12 @@ class NeuralTensorLayer(nn.Module):
         -------
          : (n, nrel)
         """
-        bilinear = self.w.matmul(hd.t()).permute(0, 1, 3, 2).matmult(tl.t())
-        linear = self.v.matmul(torch.cat([hd, tl], dim=1).t())
+        '''
+        (nrel, nhid, ninp, ninp) . (ninp, n) -> (nrel, nhid, ninp, n)
+        (nrel, nhid, n, 1, ninp) . (n, ninp, 1) -> (nrel, nhid, n, 1, 1)
+        '''
+        bilinear = self.w.matmul(hd.t()).permute(0, 1, 3, 2).unsqueeze(3).matmul(tl.unsqueeze(2)).squeeze()
+        linear = self.v.matmul(torch.cat([hd, tl], 1).t())
         return self.u.bmm(torch.tanh(bilinear + linear + self.b)).squeeze(1).t()
 
 
@@ -106,15 +114,15 @@ class Model(nn.Module):
         """
         i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
-        h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, dim=0)
+        h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
 
         logit = self.ntl(h[src], h[dst])
 
         d = {}
         eq = rel.eq(logit.max(1)[1])
         d['acc'] = eq.float().mean()
-        d['emr'] = scatter_min(eq, arange(len(m)).repeat_interleave(m)).eq(1).float().mean()
+        d['emr'] = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1).float().mean()
         if self.training:
-            d['logp'] = logit.log_softmax(1).gather(rel.unsqueeze(1)).sum() / len(seq)
+            d['logp'] = logit.log_softmax(1).gather(1, rel.unsqueeze(1)).sum() / len(seq)
 
         return d
