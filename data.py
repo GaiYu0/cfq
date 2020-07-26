@@ -1,3 +1,4 @@
+from itertools import takewhile
 import pickle
 
 import numpy as np
@@ -59,15 +60,23 @@ def get_data_loaders(args):
         b['n'], b['n_idx'], b['idx'] = cat('n'), cat('n_idx'), cat('idx')
         b['m'], b['src'], b['dst'], b['rel'] = cat('m'), cat('src'), cat('dst'), cat('rel')
 
+        offset = torch.tensor([0] + [s['n'] for s in samples[:-1]]).cumsum(0).repeat_interleave(b['m'])
+        b['src'] += offset
+        b['dst'] += offset
+
         return b
 
     data = np.load(args.data)
+
     split = np.load(args.split)
     train_dataset = CFQDataset(split['trainIdxs'], data)
     dev_dataset = CFQDataset(split['devIdxs'], data)
     test_dataset = CFQDataset(split['testIdxs'], data)
 
-    _, tok2idx = pickle.load(open(args.vocab, 'rb'))
+    print(f"{len(np.unique(data['rel']))} relations")
+
+    vocab = _, tok2idx = pickle.load(open(args.vocab, 'rb'))
+    rel_vocab = pickle.load(open(args.rel_vocab, 'rb'))
     kwargs = {'num_workers' : args.num_workers,
               'collate_fn' : collate_fn,
               'pin_memory' : True}
@@ -78,4 +87,14 @@ def get_data_loaders(args):
     ntok = data['seq'].max() + 2  # [PAD]
     nrel = data['rel'].max() + 1
 
-    return train_data_loader, dev_data_loader, test_data_loader, ntok, nrel
+    return train_data_loader, dev_data_loader, test_data_loader, ntok, nrel, vocab, rel_vocab
+
+
+def decode(b, vocab, rel_vocab):
+    idx2tok, tok2idx = vocab
+    idx2rel, rel2idx = rel_vocab
+    seq = [' '.join(idx2tok[idx] for idx in takewhile(lambda idx: idx != tok2idx['[PAD]'], r)) for r in b['seq'].tolist()]
+    '''
+    for i, [src, rel, dst] in enumerate(zip(b['src'], b['rel'], b['dst'])):
+        for src_, rel_, dst_ in zip(src.split(b['m']), rel.split(b['m']), dst.split(b['m'])):
+    '''

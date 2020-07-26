@@ -1,10 +1,10 @@
 import math
 from functools import partial
 
+from sklearn.metrics import precision_recall_fscore_support
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch_scatter import scatter_min, scatter_sum
 
 
@@ -14,6 +14,10 @@ device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('
  zeros] = map(partial(partial, device=device), [torch.arange,
                                                 torch.ones,
                                                 torch.zeros])
+
+
+def print_(*args):
+    print(*[arg.item() for arg in args])
 
 
 class PositionalEncoding(nn.Module):
@@ -34,9 +38,10 @@ class PositionalEncoding(nn.Module):
         self.variable = nn.Parameter(1e-3 * torch.randn(d_model))
 
     def forward(self, x, isvariable, isconcept):
+#       x = x + self.pe[:x.size(0), :, :]
         x = x + self.variable.where(isvariable.unsqueeze(2),
                                     self.concept.where(isconcept.unsqueeze(2),
-                                                       self.pe[:x.size(0), :]))
+                                                       self.pe[:x.size(0), :, :]))
         return self.dropout(x)
 
 
@@ -46,15 +51,15 @@ class TransformerModel(nn.Module):
         super(TransformerModel, self).__init__()
         self.tok_encoder = nn.Embedding(ntoken, ninp)
         self.pos_encoder = PositionalEncoding(ninp, dropout)
-        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayer)
+        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayer)
         self.linear = nn.Linear(nhid, nout)
         self.ninp = ninp
 
     def forward(self, src, masks):
-        src = self.tok_encoder(src) * math.sqrt(self.ninp)
-        src = self.pos_encoder(src, **masks)
-        return self.linear(self.transformer_encoder(src))
+        src = self.tok_encoder(src.t()) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src, **{k : v.t() for k, v in masks.items()})
+        return self.linear(self.transformer_encoder(src)).permute(1, 0, 2)
 
 
 class NeuralTensorLayer(nn.Module):
@@ -86,10 +91,29 @@ class NeuralTensorLayer(nn.Module):
         return self.u.bmm(torch.tanh(bilinear + linear + self.b)).squeeze(1).t()
 
 
+class LSTMModel(nn.Module):
+
+    def __init__(self, ntoken, ninp, nhid, nlayer, nout):
+        super().__init__()
+        self.tok_encoder = nn.Embedding(ntoken, ninp)
+        self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
+        self.linear = nn.Linear(nhid, nout)
+
+        self.ninp = ninp
+        self.pos_encoder = PositionalEncoding(ninp)
+
+    def forward(self, seq, *args):
+        h, _ = self.lstm_encoder(self.tok_encoder(seq))
+#       h, _ = self.lstm_encoder(self.pos_encoder(self.tok_encoder(seq) * math.sqrt(self.ninp), **args[0]))
+
+        return self.linear(h.view(seq.size(0), seq.size(1), -1))
+
+
 class Model(nn.Module):
 
-    def __init__(self, args):
+    def __init__(self, args, vocab, rel_vocab):
         super().__init__()
+#       self.seq_encoder = LSTMModel(args.ntoken, args.seq_ninp, args.seq_nhid, args.seq_nlayer, args.ntl_ninp)
         self.seq_encoder = TransformerModel(args.ntoken,
                                             args.seq_ninp,
                                             args.nhead,
@@ -97,7 +121,12 @@ class Model(nn.Module):
                                             args.seq_nlayer,
                                             args.ntl_ninp,
                                             args.dropout)
+
+        self.bn_src = nn.BatchNorm1d(args.ntl_ninp)
+        self.bn_dst = nn.BatchNorm1d(args.ntl_ninp)
         self.ntl = NeuralTensorLayer(args.ntl_ninp, args.ntl_nhid, args.nrel)
+        self.idx2tok, self.tok2idx = vocab
+        self.idx2rel, self.rel2idx = rel_vocab
 
     def forward(self, seq, masks, n, n_idx, idx, m, src, dst, rel=None):
         """
@@ -114,15 +143,24 @@ class Model(nn.Module):
         """
         i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
-        h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
+        h = self.seq_encoder(seq, masks)[i, idx, :]
+#       h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
 
-        logit = self.ntl(h[src], h[dst])
+        logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
 
         d = {}
-        eq = rel.eq(logit.max(1)[1])
+        _, argmax = logit.max(1)
+        eq = rel.eq(argmax)
         d['acc'] = eq.float().mean()
         d['emr'] = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1).float().mean()
         if self.training:
             d['logp'] = logit.log_softmax(1).gather(1, rel.unsqueeze(1)).sum() / len(seq)
 
-        return d
+        toks = seq[i, idx]
+#       print(set(self.idx2tok[src_] for src_ in toks[src][~eq]), set(self.idx2tok[src_] for src_ in toks[src][~eq]))
+#       print(set(self.idx2rel[rel_] for rel_ in rel[~eq]), set(self.idx2rel[rel_] for rel_ in rel[~eq]))
+        '''
+        print(*[[self.idx2tok[src_], self.idx2rel[rel_], self.idx2rel[argmax_], self.idx2tok[dst_]] for src_, rel_, argmax_, dst_ in zip(toks[src][~eq], rel[~eq], argmax[~eq], toks[dst][~eq])], sep='\n')
+        '''
+
+        return d, [rel.cpu(), argmax.cpu()]
