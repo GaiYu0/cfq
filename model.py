@@ -1,7 +1,6 @@
 import math
 from functools import partial
 
-from sklearn.metrics import precision_recall_fscore_support
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -169,7 +168,6 @@ class Model(nn.Module):
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
-        '''
         i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
         h = self.seq_encoder(seq, masks)[i, idx, :]
@@ -192,6 +190,7 @@ class Model(nn.Module):
                 d['loss'] = d['nll'] + self.gamma * d['norm']
 
         return d, [rel.cpu(), argmax.cpu(), tok[src].cpu().numpy(), tok[dst].cpu().numpy()]
+
         '''
         logit = self.linear(self.seq_encoder(seq, masks).sum(1))
         mask = zeros(m.sum(), len(self.idx2rel))
@@ -199,7 +198,8 @@ class Model(nn.Module):
         mask[idx, rel] = 1
         mask = scatter_sum(mask, idx.unsqueeze(1), 0).clamp_max(1).bool()
         d = {}
-        d['logp'] = torch.sum(F.logsigmoid(logit[mask]) + torch.log(1 + 1e-5 - torch.sigmoid(logit[~mask]))) / len(seq)
+        d['loss'] = d['nll'] = -F.logsigmoid(logit[mask]).mean() - (1 + 1e-5 - logit[~mask].sigmoid()).log().mean()
         d['acc'] = logit.gt(0.5).eq(mask).float().mean()
 
         return d, []
+        '''

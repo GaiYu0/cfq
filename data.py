@@ -44,8 +44,7 @@ def get_data_loaders(args):
             self.data['src'], self.data['dst'], self.data['rel'] = rag('src', 'm'), rag('dst', 'm'), rag('rel', 'm')
 
         def __len__(self):
-            return 64
-#           return len(self.idx)
+            return len(self.idx)
 
         def __getitem__(self, key):
             i = self.idx[key]

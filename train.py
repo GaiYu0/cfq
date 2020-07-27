@@ -4,6 +4,7 @@ from itertools import islice
 
 import dgl
 import numpy as np
+from sklearn.metrics import precision_recall_fscore_support
 from tensorboardX import SummaryWriter
 import torch.optim as optim
 
@@ -64,6 +65,7 @@ def main(args):
     nbat = len(train_data_loader)
     writer = SummaryWriter(args.logdir)
     for i in range(args.num_epochs):
+        acc, emr = 0, 0
         for j, b in enumerate(train_data_loader):
             place(b)
             d, _ = model(**b)
@@ -77,10 +79,14 @@ def main(args):
             for k, v in d.items():
                 writer.add_scalar(k, float(v), i * nbat + j + 1)
 
-        '''
+            acc += float(d['acc'])
+            emr += float(d['emr'])
+
+        print(acc / (j + 1), emr / (j + 1))
+
         eval_(train_data_loader, 'train', i + 1)
-        eval_(dev_data_loader, 'dev', i + 1, dump_pred=True)
-        '''
+#       eval_(dev_data_loader, 'dev', i + 1, dump_pred=True)
+        eval_(test_data_loader, 'test', i + 1, dump_pred=True)
 
 #   eval_(test_data_loader, 'test', i + 1, dump_pred=True)
 
