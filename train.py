@@ -2,6 +2,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from itertools import islice
 
+import dgl
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch.optim as optim
@@ -24,31 +25,41 @@ def main(args):
 
     def place(b):
         for k, v in b.items():
-            if isinstance(v, torch.Tensor):
+            if isinstance(v, (torch.Tensor, dgl.DGLGraph)):
                 b[k] = v.to(device)
             elif type(v) is dict:
                 place(v)
             else:
                 raise TypeError()
 
-    def eval_(data_loader, desc, global_step=None):
+    def eval_(data_loader, desc, global_step=None, dump_pred=False):
         d = defaultdict(lambda: 0)
-        y_true, y_pred = [], []
+        rel_true, rel_pred = [], []
+        if dump_pred:
+            src, dst = [], []
         for j, b in enumerate(dev_data_loader):
             place(b)
-            d_, [y_true_, y_pred_] = model(**b)
-            y_true.append(y_true_)
-            y_pred.append(y_pred_)
+            d_, [rel_true_, rel_pred_, src_, dst_] = model(**b)
+            rel_true.append(rel_true_)
+            rel_pred.append(rel_pred_)
             for k, v in d_.items():
                 d[k] += float(v)
 
+            if dump_pred:
+                src.append(src_)
+                dst.append(dst_)
+
         d = {k : v / (j + 1) for k, v in d.items()}
-        d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(np.hstack(y_true), np.hstack(y_pred), average='macro')
+        rel_true, rel_pred = np.hstack(rel_true), np.hstack(rel_pred)
+        d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
 
         print(f"[{i + 1}-{desc}]{' | '.join(f'{k}: {round(d[k], 3)}' for k in sorted(d))}")
 
         for k, v in d.items():
             writer.add_scalar(f'{desc} {k}', v, global_step)
+
+        if dump_pred:
+            np.savez(f'{desc}-{global_step}', rel_true=rel_true, rel_pred=rel_pred, src=np.hstack(src), dst=np.hstack(dst))
 
     nbat = len(train_data_loader)
     writer = SummaryWriter(args.logdir)
@@ -57,7 +68,7 @@ def main(args):
             place(b)
             d, _ = model(**b)
             opt.zero_grad()
-            d['logp'].neg().backward()
+            d['loss'].backward()
             opt.step()
 
             if (j + 1) % 10 == 0:
@@ -66,9 +77,12 @@ def main(args):
             for k, v in d.items():
                 writer.add_scalar(k, float(v), i * nbat + j + 1)
 
+        '''
         eval_(train_data_loader, 'train', i + 1)
-        eval_(dev_data_loader, 'dev', i + 1)
-        eval_(test_data_loader, 'test', i + 1)
+        eval_(dev_data_loader, 'dev', i + 1, dump_pred=True)
+        '''
+
+#   eval_(test_data_loader, 'test', i + 1, dump_pred=True)
 
 
 if __name__ == '__main__':
@@ -84,14 +98,23 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int)
 
     # model
+    parser.add_argument('--seq-model', type=str)
     parser.add_argument('--seq-ninp', type=int)
     parser.add_argument('--nhead', type=int)
     parser.add_argument('--seq-nhid', type=int)
     parser.add_argument('--seq-nlayer', type=int)
+    parser.add_argument('--dropout', type=float)
+
+    parser.add_argument('--gr', action='store_true')
+    parser.add_argument('--gr-model', type=str)
+    parser.add_argument('--gr-ninp', type=int)
+    parser.add_argument('--gr-nhid', type=int)
+    parser.add_argument('--gr-nlayer', type=int)
+
     parser.add_argument('--ntl-ninp', type=int)
     parser.add_argument('--ntl-nhid', type=int)
-    parser.add_argument('--nrel', type=int)
-    parser.add_argument('--dropout', type=float)
+
+    parser.add_argument('--gamma', type=float)
 
     # training
     parser.add_argument('--optim', type=str)

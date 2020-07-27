@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_scatter import scatter_min, scatter_sum
 
+from rgcn import *
+
 
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 [arange,
@@ -109,18 +111,34 @@ class LSTMModel(nn.Module):
         return self.linear(h.view(seq.size(0), seq.size(1), -1))
 
 
+class EmbeddingModel(nn.Module):
+
+    def __init__(self, ntok, nhid):
+        super().__init__()
+        self.embedding = nn.Embedding(ntok, nhid)
+
+    def forward(self, seq, *args):
+        return self.embedding(seq)
+
+
 class Model(nn.Module):
 
     def __init__(self, args, vocab, rel_vocab):
         super().__init__()
-#       self.seq_encoder = LSTMModel(args.ntoken, args.seq_ninp, args.seq_nhid, args.seq_nlayer, args.ntl_ninp)
-        self.seq_encoder = TransformerModel(args.ntoken,
-                                            args.seq_ninp,
-                                            args.nhead,
-                                            args.seq_nhid,
-                                            args.seq_nlayer,
-                                            args.ntl_ninp,
-                                            args.dropout)
+        if args.seq_model == 'embedding':
+            self.seq_encoder = EmbeddingModel(args.ntoken, args.ntl_ninp)
+        elif args.seq_model == 'lstm':
+            self.seq_encoder = LSTMModel(args.ntoken, args.seq_ninp, args.seq_nhid, args.seq_nlayer, args.ntl_ninp)
+        elif args.seq_model == 'transformer':
+            self.seq_encoder = TransformerModel(args.ntoken,
+                                                args.seq_ninp,
+                                                args.nhead,
+                                                args.seq_nhid,
+                                                args.seq_nlayer,
+                                                args.ntl_ninp,
+                                                args.dropout)
+        else:
+            raise Exception()
 
         self.bn_src = nn.BatchNorm1d(args.ntl_ninp)
         self.bn_dst = nn.BatchNorm1d(args.ntl_ninp)
@@ -128,12 +146,22 @@ class Model(nn.Module):
         self.idx2tok, self.tok2idx = vocab
         self.idx2rel, self.rel2idx = rel_vocab
 
-    def forward(self, seq, masks, n, n_idx, idx, m, src, dst, rel=None):
+        self.linear = nn.Linear(args.ntl_ninp, args.nrel)
+
+        if args.gr:
+            self.gamma = args.gamma
+            if args.gr_model == 'rgcn':
+                self.gr_model = RGCN(args.ntoken, args.gr_ninp, args.gr_nhid, args.ntl_ninp, args.nrel, num_hidden_layers=args.gr_nlayer)
+            else:
+                raise Exception()
+
+    def forward(self, seq, masks, n, tok, n_idx, idx, m, src, dst, rel=None, g=None):
         """
         Parameters
         ----------
         seq : (n, l)
         n : (n,)
+        tok : (n.sum(),)
         n_idx : (n.sum(),)
         idx : (n_idx.sum(),)
         m : (n,)
@@ -141,10 +169,11 @@ class Model(nn.Module):
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
+        '''
         i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
         h = self.seq_encoder(seq, masks)[i, idx, :]
-#       h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
+        h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
 
         logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
 
@@ -152,15 +181,25 @@ class Model(nn.Module):
         _, argmax = logit.max(1)
         eq = rel.eq(argmax)
         d['acc'] = eq.float().mean()
-        d['emr'] = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1).float().mean()
+        em = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1)
+        d['emr'] = em.float().mean()
         if self.training:
-            d['logp'] = logit.log_softmax(1).gather(1, rel.unsqueeze(1)).sum() / len(seq)
+            d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
 
-        toks = seq[i, idx]
-#       print(set(self.idx2tok[src_] for src_ in toks[src][~eq]), set(self.idx2tok[src_] for src_ in toks[src][~eq]))
-#       print(set(self.idx2rel[rel_] for rel_ in rel[~eq]), set(self.idx2rel[rel_] for rel_ in rel[~eq]))
-        '''
-        print(*[[self.idx2tok[src_], self.idx2rel[rel_], self.idx2rel[argmax_], self.idx2tok[dst_]] for src_, rel_, argmax_, dst_ in zip(toks[src][~eq], rel[~eq], argmax[~eq], toks[dst][~eq])], sep='\n')
-        '''
+            if g is not None:
+                h_ref = self.gr_model(g)
+                d['norm'] = torch.norm(h - h_ref, p=2, dim=1).mean()
+                d['loss'] = d['nll'] + self.gamma * d['norm']
 
-        return d, [rel.cpu(), argmax.cpu()]
+        return d, [rel.cpu(), argmax.cpu(), tok[src].cpu().numpy(), tok[dst].cpu().numpy()]
+        '''
+        logit = self.linear(self.seq_encoder(seq, masks).sum(1))
+        mask = zeros(m.sum(), len(self.idx2rel))
+        idx = arange(len(m)).repeat_interleave(m)
+        mask[idx, rel] = 1
+        mask = scatter_sum(mask, idx.unsqueeze(1), 0).clamp_max(1).bool()
+        d = {}
+        d['logp'] = torch.sum(F.logsigmoid(logit[mask]) + torch.log(1 + 1e-5 - torch.sigmoid(logit[~mask]))) / len(seq)
+        d['acc'] = logit.gt(0.5).eq(mask).float().mean()
+
+        return d, []
