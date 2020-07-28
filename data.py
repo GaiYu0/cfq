@@ -50,7 +50,18 @@ def get_data_loaders(args):
         def __getitem__(self, key):
             i = self.idx[key]
             d = {k : v[i] for k, v in self.data.items()}
+
             d['cfq_idx'] = i
+
+            n = self.data['n'][i]
+            n_ = np.arange(n)
+            u, v = np.meshgrid(n_, n_)
+            d['u'], d['v'] = u.flatten(), v.flatten()
+
+            mask = np.zeros([n, n, nrel], dtype=bool)
+            mask[d['src'], d['dst'], d['rel']] = True
+            d['mask'] = mask.reshape([-1, nrel])
+
             return d
 
     def collate_fn(samples):
@@ -71,9 +82,16 @@ def get_data_loaders(args):
         b['n'], b['n_idx'], b['idx'] = cat('n'), cat('n_idx'), cat('idx')
         b['m'], src, dst, b['rel'] = cat('m'), cat('src'), cat('dst'), cat('rel')
 
-        offset = torch.tensor([0] + [s['n'] for s in samples[:-1]]).cumsum(0).repeat_interleave(b['m'])
-        b['src'] = src + offset
-        b['dst'] = dst + offset
+        offset = torch.tensor([0] + [s['n'] for s in samples[:-1]]).cumsum(0)
+
+        offset_ = offset.repeat_interleave(b['m'])
+        b['src'] = src + offset_
+        b['dst'] = dst + offset_
+
+        offset_ = offset.repeat_interleave(torch.tensor([len(s['u']) for s in samples]))
+        b['u'] = cat('u') + offset_
+        b['v'] = cat('v') + offset_
+        b['mask'] = torch.from_numpy(np.vstack([s['mask'] for s in samples]))
 
         b['tok'] = cat('tok')
         b['cfq_idx'] = cat('cfq_idx')
@@ -90,22 +108,22 @@ def get_data_loaders(args):
 
     data = np.load(args.data)
 
+    vocab = _, tok2idx = pickle.load(open(args.vocab, 'rb'))
+    rel_vocab = pickle.load(open(args.rel_vocab, 'rb'))
+    ntok = len(tok2idx)
+    nrel = data['rel'].max() + 1
+
     split = np.load(args.split)
     train_dataset = CFQDataset(split['trainIdxs'], data)
     dev_dataset = CFQDataset(split['devIdxs'], data)
     test_dataset = CFQDataset(split['testIdxs'], data)
 
-    vocab = _, tok2idx = pickle.load(open(args.vocab, 'rb'))
-    rel_vocab = pickle.load(open(args.rel_vocab, 'rb'))
     kwargs = {'num_workers' : args.num_workers,
               'collate_fn' : collate_fn,
               'pin_memory' : True}
     train_data_loader = DataLoader(train_dataset, args.train_batch_size, shuffle=False, drop_last=True, **kwargs)
     dev_data_loader = DataLoader(dev_dataset, args.eval_batch_size, **kwargs)
     test_data_loader = DataLoader(test_dataset, args.eval_batch_size, **kwargs)
-
-    ntok = len(tok2idx)
-    nrel = data['rel'].max() + 1
 
     return train_data_loader, dev_data_loader, test_data_loader, ntok, nrel, vocab, rel_vocab
 

@@ -160,7 +160,9 @@ class Model(nn.Module):
             else:
                 raise Exception()
 
-    def forward(self, seq, n, tok, n_idx, idx, m, src, dst, rel=None, g=None, **kwargs):
+        self.w_pos = args.w_pos
+
+    def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
         """
         Parameters
         ----------
@@ -178,23 +180,32 @@ class Model(nn.Module):
         j = arange(n.sum()).repeat_interleave(n_idx)
         h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
-        logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
+#       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
+        logit = self.ntl(self.bn_src(h[u]), self.bn_dst(h[v]))
 
         d = {}
+        '''
         _, argmax = logit.max(1)
         eq = rel.eq(argmax)
         d['acc'] = eq.float().mean()
         em = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1)
         d['emr'] = em.float().mean()
+        '''
+        eq = logit.gt(0.5).eq(mask)
+        d['acc'] = eq.float().mean()
+        em = scatter_min(eq.all(1).int(), arange(len(n)).repeat_interleave(n * n))[0]
+        d['emr'] = em.float().mean()
         if self.training:
-            d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
+#           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
+            d['loss'] = d['nll'] = -self.w_pos * F.logsigmoid(logit[mask]).mean() - (1 + 1e-5 - logit[~mask].sigmoid()).log().mean()
 
             if g is not None:
                 h_ref = self.gr_model(g)
                 d['norm'] = torch.norm(h - h_ref, p=2, dim=1).mean()
                 d['loss'] = d['nll'] + self.gamma * d['norm']
 
-        return d, [rel.cpu(), argmax.cpu(), tok[src].cpu().numpy(), tok[dst].cpu().numpy()]
+        return d, [mask.cpu(), eq.cpu(), tok[src].cpu().numpy(), tok[dst].cpu().numpy()]
+#       return d, [rel.cpu(), argmax.cpu(), tok[src].cpu().numpy(), tok[dst].cpu().numpy()]
 
         '''
         logit = self.linear(self.seq_encoder(seq, masks).sum(1))

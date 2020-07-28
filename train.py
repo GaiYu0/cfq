@@ -54,7 +54,11 @@ def main(args):
                 dst.append(dst_)
 
         d = {k : v / (j + 1) for k, v in d.items()}
+        '''
         rel_true, rel_pred = np.hstack(rel_true), np.hstack(rel_pred)
+        d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
+        '''
+        rel_true, rel_pred = np.vstack(rel_true), np.vstack(rel_pred)
         d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
 
         print(f"[{i + 1}-{desc}]{' | '.join(f'{k}: {round(d[k], 3)}' for k in sorted(d))}")
@@ -85,13 +89,12 @@ def main(args):
             acc += float(d['acc'])
             emr += float(d['emr'])
 
-        print(acc / (j + 1), emr / (j + 1))
+        print(acc / (j + 1), emr / (j + 1))  # TODO: running mean not equal to mean
 
         eval_(train_data_loader, 'train', i + 1)
-#       eval_(dev_data_loader, 'dev', i + 1, dump_pred=True)
-        eval_(test_data_loader, 'test', i + 1, dump_pred=True)
+        eval_(dev_data_loader, 'dev', i + 1, dump_pred=args.dump_pred)
 
-#   eval_(test_data_loader, 'test', i + 1, dump_pred=True)
+#   eval_(test_data_loader, 'test', i + 1, dump_pred=args.dump_pred)
 
 
 if __name__ == '__main__':
@@ -123,6 +126,7 @@ if __name__ == '__main__':
     parser.add_argument('--ntl-ninp', type=int)
     parser.add_argument('--ntl-nhid', type=int)
 
+    parser.add_argument('--w-pos', type=float)
     parser.add_argument('--gamma', type=float)
 
     # training
@@ -130,6 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float)
     parser.add_argument('--num-epochs', type=int)
     parser.add_argument('--logdir', type=str, default=None)
+    parser.add_argument('--dump-pred', action='store_true')
 
     args = parser.parse_args()
 
