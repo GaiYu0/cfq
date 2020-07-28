@@ -4,6 +4,7 @@ import pickle
 import dgl
 import numpy as np
 import torch
+from torch.nn.utils.rnn import pack_sequence
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import DataLoader
 
@@ -48,16 +49,23 @@ def get_data_loaders(args):
 
         def __getitem__(self, key):
             i = self.idx[key]
-            return {k : v[i] for k, v in self.data.items()}
+            d = {k : v[i] for k, v in self.data.items()}
+            d['cfq_idx'] = i
+            return d
 
     def collate_fn(samples):
         b = {}
 
         max_len = max(len(s['seq']) for s in samples)
         pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
-        b['seq'] = pad('seq', tok2idx['[PAD]'])
-        b['masks'] = {'isconcept' : pad('isconcept', False),
-                      'isvariable' : pad('isvariable', False)}
+        if args.seq_model == 'lstm':
+            b['seq'] = pack_sequence([torch.from_numpy(s['seq']) for s in samples], enforce_sorted=False)
+        elif args.seq_model == 'transformer':
+            b['seq'] = pad('seq', tok2idx['[PAD]'])
+            b['masks'] = {'isconcept' : pad('isconcept', False),
+                          'isvariable' : pad('isvariable', False)}
+        else:
+            raise Exception()
 
         cat = lambda k: torch.from_numpy(np.hstack([s[k] for s in samples]))
         b['n'], b['n_idx'], b['idx'] = cat('n'), cat('n_idx'), cat('idx')
@@ -68,6 +76,7 @@ def get_data_loaders(args):
         b['dst'] = dst + offset
 
         b['tok'] = cat('tok')
+        b['cfq_idx'] = cat('cfq_idx')
 
         if args.gr:
             b['g'] = dgl.DGLGraph((b['src'], b['dst']))

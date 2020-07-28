@@ -6,6 +6,7 @@ import dgl
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 from tensorboardX import SummaryWriter
+from torch.nn.utils.rnn import PackedSequence
 import torch.optim as optim
 
 from data import *
@@ -26,7 +27,7 @@ def main(args):
 
     def place(b):
         for k, v in b.items():
-            if isinstance(v, (torch.Tensor, dgl.DGLGraph)):
+            if isinstance(v, (torch.Tensor, PackedSequence, dgl.DGLGraph)):
                 b[k] = v.to(device)
             elif type(v) is dict:
                 place(v)
@@ -37,7 +38,7 @@ def main(args):
         d = defaultdict(lambda: 0)
         rel_true, rel_pred = [], []
         if dump_pred:
-            src, dst = [], []
+            m, cfq_idx, src, dst = [], [], [], []
         for j, b in enumerate(dev_data_loader):
             place(b)
             d_, [rel_true_, rel_pred_, src_, dst_] = model(**b)
@@ -47,6 +48,8 @@ def main(args):
                 d[k] += float(v)
 
             if dump_pred:
+                cfq_idx.append(b['cfq_idx'].cpu().numpy())
+                m.append(b['m'].cpu().numpy())
                 src.append(src_)
                 dst.append(dst_)
 
@@ -60,7 +63,7 @@ def main(args):
             writer.add_scalar(f'{desc} {k}', v, global_step)
 
         if dump_pred:
-            np.savez(f'{desc}-{global_step}', rel_true=rel_true, rel_pred=rel_pred, src=np.hstack(src), dst=np.hstack(dst))
+            np.savez(f'{desc}-{global_step}', rel_true=rel_true, rel_pred=rel_pred, src=np.hstack(src), dst=np.hstack(dst), m=np.hstack(m), cfq_idx=np.hstack(cfq_idx))
 
     nbat = len(train_data_loader)
     writer = SummaryWriter(args.logdir)

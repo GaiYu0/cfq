@@ -3,6 +3,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
 import torch.nn.functional as F
 from torch_scatter import scatter_min, scatter_sum
 
@@ -103,11 +104,16 @@ class LSTMModel(nn.Module):
         self.ninp = ninp
         self.pos_encoder = PositionalEncoding(ninp)
 
-    def forward(self, seq, *args):
-        h, _ = self.lstm_encoder(self.tok_encoder(seq))
-#       h, _ = self.lstm_encoder(self.pos_encoder(self.tok_encoder(seq) * math.sqrt(self.ninp), **args[0]))
+    @staticmethod
+    def apply(module, packed_seq):
+        return PackedSequence(module(packed_seq.data), packed_seq.batch_sizes,
+                              packed_seq.sorted_indices, packed_seq.unsorted_indices)
 
-        return self.linear(h.view(seq.size(0), seq.size(1), -1))
+    def forward(self, seq):
+        h, _ = self.lstm_encoder(self.apply(self.tok_encoder, seq))
+
+        h, _ = pad_packed_sequence(h, batch_first=True)
+        return self.linear(h)
 
 
 class EmbeddingModel(nn.Module):
@@ -154,7 +160,7 @@ class Model(nn.Module):
             else:
                 raise Exception()
 
-    def forward(self, seq, masks, n, tok, n_idx, idx, m, src, dst, rel=None, g=None):
+    def forward(self, seq, n, tok, n_idx, idx, m, src, dst, rel=None, g=None, **kwargs):
         """
         Parameters
         ----------
@@ -168,10 +174,9 @@ class Model(nn.Module):
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
-        i = arange(len(seq)).repeat_interleave(n).repeat_interleave(n_idx)
+        i = arange(len(n)).repeat_interleave(n).repeat_interleave(n_idx)
         j = arange(n.sum()).repeat_interleave(n_idx)
-        h = self.seq_encoder(seq, masks)[i, idx, :]
-        h = scatter_sum(self.seq_encoder(seq, masks)[i, idx, :], j, 0)
+        h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
         logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
 
