@@ -106,14 +106,14 @@ def get_data_loaders(args):
 
         return b
 
-    data = np.load(args.data)
+    data = np.load(f'{args.input_dir}/data.npz')
 
-    vocab = _, tok2idx = pickle.load(open(args.vocab, 'rb'))
-    rel_vocab = pickle.load(open(args.rel_vocab, 'rb'))
+    vocab = _, tok2idx = pickle.load(open(f'{args.input_dir}/vocab.pickle', 'rb'))
+    rel_vocab = pickle.load(open(f'{args.input_dir}/rel-vocab.pickle', 'rb'))
     ntok = len(tok2idx)
     nrel = data['rel'].max() + 1
 
-    split = np.load(args.split)
+    split = np.load(f'{args.input_dir}/splits/{args.split}.npz')
     train_dataset = CFQDataset(split['trainIdxs'], data)
     dev_dataset = CFQDataset(split['devIdxs'], data)
     test_dataset = CFQDataset(split['testIdxs'], data)

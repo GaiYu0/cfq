@@ -160,7 +160,7 @@ class Model(nn.Module):
             else:
                 raise Exception()
 
-        self.w_pos = args.w_pos
+        self.args = args
 
     def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
         """
@@ -191,13 +191,13 @@ class Model(nn.Module):
         em = scatter_min(eq.int(), arange(len(m)).repeat_interleave(m))[0].eq(1)
         d['emr'] = em.float().mean()
         '''
-        eq = logit.gt(0.5).eq(mask)
+        eq = logit.gt(0).eq(mask)
         d['acc'] = eq.float().mean()
         em = scatter_min(eq.all(1).int(), arange(len(n)).repeat_interleave(n * n))[0]
         d['emr'] = em.float().mean()
         if self.training:
 #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
-            d['loss'] = d['nll'] = -self.w_pos * F.logsigmoid(logit[mask]).mean() - (1 + 1e-5 - logit[~mask].sigmoid()).log().mean()
+            d['loss'] = d['nll'] = -self.args.w_pos * F.logsigmoid(logit[mask]).mean() - (1 + 1e-5 - logit[~mask].sigmoid()).log().mean()
 
             if g is not None:
                 h_ref = self.gr_model(g)

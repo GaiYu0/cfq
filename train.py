@@ -1,13 +1,17 @@
 from argparse import ArgumentParser
 from collections import defaultdict
+from datetime import datetime
 from itertools import islice
+import os
+import socket
 
 import dgl
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 from tensorboardX import SummaryWriter
+import torch
 from torch.nn.utils.rnn import PackedSequence
-import torch.optim as optim
+import torch.optim
 
 from data import *
 from model import *
@@ -23,7 +27,7 @@ def main(args):
     args.nrel = nrel
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     model = Model(args, vocab, rel_vocab).to(device)
-    opt = getattr(optim, args.optim)(model.parameters(), args.lr)
+    optim = getattr(torch.optim, args.optim)(model.parameters(), args.lr)
 
     def place(b):
         for k, v in b.items():
@@ -35,13 +39,15 @@ def main(args):
                 raise TypeError()
 
     def eval_(data_loader, desc, global_step=None, dump_pred=False):
+        model.eval()
         d = defaultdict(lambda: 0)
         rel_true, rel_pred = [], []
         if dump_pred:
             m, cfq_idx, src, dst = [], [], [], []
         for j, b in enumerate(dev_data_loader):
             place(b)
-            d_, [rel_true_, rel_pred_, src_, dst_] = model(**b)
+            with torch.no_grad():
+                d_, [rel_true_, rel_pred_, src_, dst_] = model(**b)
             rel_true.append(rel_true_)
             rel_pred.append(rel_pred_)
             for k, v in d_.items():
@@ -70,15 +76,17 @@ def main(args):
             np.savez(f'{desc}-{global_step}', rel_true=rel_true, rel_pred=rel_pred, src=np.hstack(src), dst=np.hstack(dst), m=np.hstack(m), cfq_idx=np.hstack(cfq_idx))
 
     nbat = len(train_data_loader)
-    writer = SummaryWriter(args.logdir)
+    writer = SummaryWriter(f'runs/{args.id}')
+    os.makedirs(f'{args.output_dir}/{args.id}')
     for i in range(args.num_epochs):
         acc, emr = 0, 0
+        model.train()
         for j, b in enumerate(train_data_loader):
             place(b)
             d, _ = model(**b)
-            opt.zero_grad()
+            optim.zero_grad()
             d['loss'].backward()
-            opt.step()
+            optim.step()
 
             if (j + 1) % 10 == 0:
                 print(f"[{i}-{j + 1}]{' | '.join(f'{k}: {round(float(d[k]), 3)}' for k in sorted(d))}")
@@ -94,13 +102,19 @@ def main(args):
         eval_(train_data_loader, 'train', i + 1)
         eval_(dev_data_loader, 'dev', i + 1, dump_pred=args.dump_pred)
 
-#   eval_(test_data_loader, 'test', i + 1, dump_pred=args.dump_pred)
+        torch.save({'model_state_dict': model.state_dict(),
+                    'optim_state_dict': optim.state_dict()}, f'{args.output_dir}/{args.id}/{i}.ckpt')
+
+    eval_(test_data_loader, 'test', i + 1, dump_pred=args.dump_pred)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
 
     # data
+    parser.add_argument('--input-dir', type=str)
+    parser.add_argument('--output-dir', type=str)
+
     parser.add_argument('--data', type=str)
     parser.add_argument('--split', type=str)
     parser.add_argument('--train-batch-size', type=int)
@@ -133,9 +147,11 @@ if __name__ == '__main__':
     parser.add_argument('--optim', type=str)
     parser.add_argument('--lr', type=float)
     parser.add_argument('--num-epochs', type=int)
-    parser.add_argument('--logdir', type=str, default=None)
     parser.add_argument('--dump-pred', action='store_true')
 
     args = parser.parse_args()
+    args.id = datetime.now().strftime('%Y-%m-%d@%H:%M:%S') + f"@{socket.gethostname()}#{os.getpid()}"
+    for k, v in vars(args).items():
+        print(f'args.{k} = {repr(v)}')
 
     main(args)
