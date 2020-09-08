@@ -51,6 +51,8 @@ def get_data_loaders(args):
             i = self.idx[key]
             d = {k : v[i] for k, v in self.data.items()}
 
+            d['ispad'] = len(d['seq']) * [False]
+
             d['cfq_idx'] = i
 
             n = self.data['n'][i]
@@ -58,6 +60,8 @@ def get_data_loaders(args):
             u, v = np.meshgrid(n_, n_)
             d['u'], d['v'] = u.flatten(), v.flatten()
 
+            idx2rel, _ = rel_vocab
+            nrel = len(idx2rel)
             mask = np.zeros([n, n, nrel], dtype=bool)
             mask[d['src'], d['dst'], d['rel']] = True
             d['mask'] = mask.reshape([-1, nrel])
@@ -72,9 +76,10 @@ def get_data_loaders(args):
         if args.seq_model == 'lstm':
             b['seq'] = pack_sequence([torch.from_numpy(s['seq']) for s in samples], enforce_sorted=False)
         elif args.seq_model == 'transformer':
-            b['seq'] = pad('seq', tok2idx['[PAD]'])
-            b['masks'] = {'isconcept' : pad('isconcept', False),
-                          'isvariable' : pad('isvariable', False)}
+            b['seq'] = {'tok'        : pad('seq', tok2idx['[PAD]']).t(),
+                        'ispad'      : pad('ispad', True),
+                        'isconcept'  : pad('isconcept', False).t(),
+                        'isvariable' : pad('isvariable', False).t()}
         else:
             raise Exception()
 
@@ -108,10 +113,8 @@ def get_data_loaders(args):
 
     data = np.load(f'{args.input_dir}/data.npz')
 
-    vocab = _, tok2idx = pickle.load(open(f'{args.input_dir}/vocab.pickle', 'rb'))
+    tok_vocab = _, tok2idx = pickle.load(open(f'{args.input_dir}/vocab.pickle', 'rb'))
     rel_vocab = pickle.load(open(f'{args.input_dir}/rel-vocab.pickle', 'rb'))
-    ntok = len(tok2idx)
-    nrel = data['rel'].max() + 1
 
     split = np.load(f'{args.input_dir}/splits/{args.split}.npz')
     train_dataset = CFQDataset(split['trainIdxs'], data)
@@ -125,14 +128,4 @@ def get_data_loaders(args):
     dev_data_loader = DataLoader(dev_dataset, args.eval_batch_size, **kwargs)
     test_data_loader = DataLoader(test_dataset, args.eval_batch_size, **kwargs)
 
-    return train_data_loader, dev_data_loader, test_data_loader, ntok, nrel, vocab, rel_vocab
-
-
-def decode(b, vocab, rel_vocab):
-    idx2tok, tok2idx = vocab
-    idx2rel, rel2idx = rel_vocab
-    seq = [' '.join(idx2tok[idx] for idx in takewhile(lambda idx: idx != tok2idx['[PAD]'], r)) for r in b['seq'].tolist()]
-    '''
-    for i, [src, rel, dst] in enumerate(zip(b['src'], b['rel'], b['dst'])):
-        for src_, rel_, dst_ in zip(src.split(b['m']), rel.split(b['m']), dst.split(b['m'])):
-    '''
+    return train_data_loader, dev_data_loader, test_data_loader, tok_vocab, rel_vocab

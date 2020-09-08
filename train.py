@@ -10,102 +10,68 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 from tensorboardX import SummaryWriter
 import torch
-from torch.nn.utils.rnn import PackedSequence
 import torch.optim
 
 from data import *
 from model import *
+from utils import *
 
 
 def main(args):
     [train_data_loader,
      dev_data_loader,
      test_data_loader,
-     ntok, nrel, vocab, rel_vocab] = get_data_loaders(args)
+     vocab, rel_vocab] = get_data_loaders(args)
 
-    args.ntoken = ntok
-    args.nrel = nrel
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     model = Model(args, vocab, rel_vocab).to(device)
-    optim = getattr(torch.optim, args.optim)(model.parameters(), args.lr)
-
-    def place(b):
-        for k, v in b.items():
-            if isinstance(v, (torch.Tensor, PackedSequence, dgl.DGLGraph)):
-                b[k] = v.to(device)
-            elif type(v) is dict:
-                place(v)
-            else:
-                raise TypeError()
-
-    def eval_(data_loader, desc, global_step=None, dump_pred=False):
-        model.eval()
-        d = defaultdict(lambda: 0)
-        rel_true, rel_pred = [], []
-        if dump_pred:
-            m, cfq_idx, src, dst = [], [], [], []
-        for j, b in enumerate(dev_data_loader):
-            place(b)
-            with torch.no_grad():
-                d_, [rel_true_, rel_pred_, src_, dst_] = model(**b)
-            rel_true.append(rel_true_)
-            rel_pred.append(rel_pred_)
-            for k, v in d_.items():
-                d[k] += float(v)
-
-            if dump_pred:
-                cfq_idx.append(b['cfq_idx'].cpu().numpy())
-                m.append(b['m'].cpu().numpy())
-                src.append(src_)
-                dst.append(dst_)
-
-        d = {k : v / (j + 1) for k, v in d.items()}
-        '''
-        rel_true, rel_pred = np.hstack(rel_true), np.hstack(rel_pred)
-        d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
-        '''
-        rel_true, rel_pred = np.vstack(rel_true), np.vstack(rel_pred)
-        d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
-
-        print(f"[{i + 1}-{desc}]{' | '.join(f'{k}: {round(d[k], 3)}' for k in sorted(d))}")
-
-        for k, v in d.items():
-            writer.add_scalar(f'{desc} {k}', v, global_step)
-
-        if dump_pred:
-            np.savez(f'{desc}-{global_step}', rel_true=rel_true, rel_pred=rel_pred, src=np.hstack(src), dst=np.hstack(dst), m=np.hstack(m), cfq_idx=np.hstack(cfq_idx))
+    lr = 0 if args.num_warmup_steps > 0 else args.lr
+    optim = getattr(torch.optim, args.optim)(model.parameters(), lr)
 
     nbat = len(train_data_loader)
     writer = SummaryWriter(f'runs/{args.id}')
     os.makedirs(f'{args.output_dir}/{args.id}')
     for i in range(args.num_epochs):
-        acc, emr = 0, 0
         model.train()
+        d = defaultdict(lambda: 0)
         for j, b in enumerate(train_data_loader):
+            for param_group in optim.param_groups:
+                if param_group['lr'] < args.lr:
+                    param_group['lr'] += args.lr / args.num_warmup_steps
+
             place(b)
-            d, _ = model(**b)
+            d_, _ = model(**b)
             optim.zero_grad()
-            d['loss'].backward()
+            d_['loss'].backward()
             optim.step()
 
             if (j + 1) % 10 == 0:
-                print(f"[{i}-{j + 1}]{' | '.join(f'{k}: {round(float(d[k]), 3)}' for k in sorted(d))}")
+                print(f"[{i}-{j + 1}]{metrics(d_)}")
 
-            for k, v in d.items():
+            for k, v in d_.items():
                 writer.add_scalar(k, float(v), i * nbat + j + 1)
 
-            acc += float(d['acc'])
-            emr += float(d['emr'])
+            for k, v in d_.items():
+                d[k] += float(v)
 
-        print(acc / (j + 1), emr / (j + 1))  # TODO: running mean not equal to mean
+        # TODO: running mean far from mean
+        print(f"[{i + 1}]{metrics({k : v / (j + 1) for k, v in d.items()})}")
 
-        eval_(train_data_loader, 'train', i + 1)
-        eval_(dev_data_loader, 'dev', i + 1, dump_pred=args.dump_pred)
+        for x in ['train', 'dev', 'test']:
+            data_loader = locals()[f'{x}_data_loader']
+            d, z = eval_(data_loader, model, ['n', 'cfq_idx'])
+            d['p'], d['r'], d['f'], _ = precision_recall_fscore_support(z['rel_true'], z['rel_pred'], average='macro')
 
-        torch.save({'model_state_dict': model.state_dict(),
-                    'optim_state_dict': optim.state_dict()}, f'{args.output_dir}/{args.id}/{i}.ckpt')
+            print(f"[{i + 1}-{x}]{metrics(d)}")
 
-    eval_(test_data_loader, 'test', i + 1, dump_pred=args.dump_pred)
+            for k, v in d.items():
+                writer.add_scalar(f'{x} {k}', v, i + 1)
+
+            if args.save_pred:
+                np.savez(f'{i + 1}-{x}', **z)
+
+        if (i + 1) % 25 == 0:
+            torch.save({'model_state_dict': model.state_dict(),
+                        'optim_state_dict': optim.state_dict()}, f'{args.output_dir}/{args.id}/{i}.ckpt')
 
 
 if __name__ == '__main__':
@@ -139,6 +105,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--ntl-ninp', type=int)
     parser.add_argument('--ntl-nhid', type=int)
+    parser.add_argument('--bilinear', action='store_true')
 
     parser.add_argument('--w-pos', type=float)
     parser.add_argument('--gamma', type=float)
@@ -147,7 +114,8 @@ if __name__ == '__main__':
     parser.add_argument('--optim', type=str)
     parser.add_argument('--lr', type=float)
     parser.add_argument('--num-epochs', type=int)
-    parser.add_argument('--dump-pred', action='store_true')
+    parser.add_argument('--num-warmup-steps', type=int)
+    parser.add_argument('--save-pred', action='store_true')
 
     args = parser.parse_args()
     args.id = datetime.now().strftime('%Y-%m-%d@%H:%M:%S') + f"@{socket.gethostname()}#{os.getpid()}"
