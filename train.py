@@ -14,6 +14,7 @@ import torch.optim
 
 from data import *
 from model import *
+from seq2seq import *
 from utils import *
 
 
@@ -23,6 +24,10 @@ def main(args):
      test_data_loader,
      vocab, rel_vocab] = get_data_loaders(args)
 
+    '''
+    if args.seq2seq:
+        Model = Seq2Seq
+    '''
     model = Model(args, vocab, rel_vocab).to(device)
     lr = 0 if args.num_warmup_steps > 0 else args.lr
     optim = getattr(torch.optim, args.optim)(model.parameters(), lr)
@@ -90,6 +95,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int)
 
     # model
+    parser.add_argument('--seq2seq', action='store_true')
+
     parser.add_argument('--seq-model', type=str)
     parser.add_argument('--seq-ninp', type=int)
     parser.add_argument('--nhead', type=int)

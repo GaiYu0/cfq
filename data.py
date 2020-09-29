@@ -44,6 +44,13 @@ def get_data_loaders(args):
             self.data['tok'] = rag('tok', 'n')
             self.data['src'], self.data['dst'], self.data['rel'] = rag('src', 'm'), rag('dst', 'm'), rag('rel', 'm')
 
+            disp = np.hstack([np.zeros(1, dtype=int), data['n']]).cumsum()
+            disp_ = disp[:-1].repeat(data['m'])
+            tok_src = data['tok'][data['src'] + disp_]
+            tok_dst = data['tok'][data['dst'] + disp_]
+            tok_rel = data['rel'] + ntok
+            self.data['q'] = RaggedArray(np.vstack([tok_src, tok_rel, tok_dst]).T, disp)
+
         def __len__(self):
             return len(self.idx)
 
@@ -109,12 +116,23 @@ def get_data_loaders(args):
             _, inverse, counts = torch.unique(torch.stack([b['dst'], b['rel']]), dim=1, return_inverse=True, return_counts=True)
             b['g'].edata['norm'] = counts.float().reciprocal().unsqueeze(1)[inverse]
 
+        if args.seq_model == 'lstm':
+            max_len = b['m'].max() + 2
+            hd = ntok + nrel
+            tl = hd + 1
+            b['q'] = torch.from_numpy(np.vstack([np.hstack([[hd],
+                                                            s['q'].reshape([-1]),
+                                                            3 * (max_len - len(s['q'])) * [tok2idx['[PAD]']],
+                                                            [tl]])
+                                      for s in samples]))
+
         return b
 
     data = np.load(f'{args.input_dir}/data.npz')
 
     tok_vocab = _, tok2idx = pickle.load(open(f'{args.input_dir}/vocab.pickle', 'rb'))
-    rel_vocab = pickle.load(open(f'{args.input_dir}/rel-vocab.pickle', 'rb'))
+    rel_vocab = _, rel2idx = pickle.load(open(f'{args.input_dir}/rel-vocab.pickle', 'rb'))
+    ntok, nrel = len(tok2idx), len(rel2idx)
 
     split = np.load(f'{args.input_dir}/splits/{args.split}.npz')
     train_dataset = CFQDataset(split['trainIdxs'], data)
