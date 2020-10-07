@@ -1,42 +1,55 @@
 import math
-from functools import partial
 
+from absl import flags
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_packed_sequence
+from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
-from rgcn import *
-import utils
+from cfq.rgcn import RGCN
 
+FLAGS = flags.FLAGS
+# global flags
+flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
+flags.DEFINE_float("w_pos", 1.0, "Positional weight.", lower_bound=0.0, upper_bound=1.0)
+flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
 
-device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-[arange,
- ones,
- zeros] = map(partial(partial, device=device), [torch.arange,
-                                                torch.ones,
-                                                torch.zeros])
+# sequence model flags
+flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
+flags.DEFINE_boolean("seq_bilinear", False, "Sequence model is bilinear?")
+flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
+flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
+flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
+flags.DEFINE_integer("seq_nhead", 16, "Transformer number of heads")
+
+# neural tensor layer flags
+flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
+flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
+
+# gnn flags
+flags.DEFINE_boolean("use_graph", False, "Use GCN?")
+flags.DEFINE_integer("graph_inp", 64, "GNN input dimension")
+flags.DEFINE_integer("graph_hidden_dim", 64, "GNN hidden dimension")
+flags.DEFINE_integer("graph_nlayers", 4, "GNN number of layers")
 
 
 class LSTMModel(nn.Module):
-
     def __init__(self, ntok, ninp, nhid, nlayer):
         super().__init__()
+        self.ninp = ninp
         self.tok_encoder = nn.Embedding(ntok, ninp)
         self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
-
-        self.ninp = ninp
         self.pos_encoder = PositionalEncoding(ninp, 0.0)
 
     def forward(self, seq):
-        h, _ = self.lstm_encoder(utils.apply(self.tok_encoder, seq))
+        apply_out = PackedSequence(self.tok_encoder(seq.data), seq.batch_sizes, seq.sorted_indices, seq.unsorted_indices)
+        h, _ = self.lstm_encoder(apply_out)
         h, _ = pad_packed_sequence(h, batch_first=True)
         return h
 
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, d_model, dropout, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -47,23 +60,17 @@ class PositionalEncoding(nn.Module):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
         self.concept = nn.Parameter(1e-3 * torch.randn(d_model))
         self.variable = nn.Parameter(1e-3 * torch.randn(d_model))
 
     def forward(self, x, isvariable, isconcept):
-        x = x + self.pe[:x.size(0), :, :]
-        '''
-        x = x + self.variable.where(isvariable.unsqueeze(2),
-                                    self.concept.where(isconcept.unsqueeze(2),
-                                                       self.pe[:x.size(0), :, :]))
-        '''
+        x = x + self.pe[: x.size(0), :, :]
         return self.dropout(x)
 
 
 class TransformerModel(nn.Module):
-
     def __init__(self, ntok, ninp, nhead, nhid, nlayer, dropout):
         super().__init__()
         self.tok_encoder = nn.Embedding(ntok, ninp)
@@ -73,13 +80,12 @@ class TransformerModel(nn.Module):
         self.ninp = ninp
 
     def forward(self, seq):
-        src = self.tok_encoder(seq['tok']) * math.sqrt(self.ninp)
-        src = self.pos_encoder(src, seq['isvariable'], seq['isconcept'])
-        return self.transformer_encoder(src, src_key_padding_mask=seq['ispad']).permute(1, 0, 2)
+        src = self.tok_encoder(seq["tok"]) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src, seq["isvariable"], seq["isconcept"])
+        return self.transformer_encoder(src, src_key_padding_mask=seq["ispad"]).permute(1, 0, 2)
 
 
 class NeuralTensorLayer(nn.Module):
-
     def __init__(self, ninp, nhid, nrel, bilinear):
         super().__init__()
         self.nhid = nhid
@@ -104,15 +110,15 @@ class NeuralTensorLayer(nn.Module):
         -------
          : (n, nrel)
         """
-        '''
+        """
         (nrel, nhid, ninp, ninp) . (ninp, n) -> (nrel, nhid, ninp, n)
         (nrel, nhid, n, 1, ninp) . (n, ninp, 1) -> (nrel, nhid, n, 1, 1)
-        '''
+        """
         linear = self.v.matmul(torch.cat([hd, tl], 1).t())
         if self.bilinear:
             bilinear = self.w.matmul(hd.t()).permute(0, 1, 3, 2).unsqueeze(3).matmul(tl.unsqueeze(2)).squeeze()
-#           return self.u.bmm(torch.tanh(bilinear + linear + self.b)).squeeze(1).t()
-#           return self.u.bmm(torch.tanh(bilinear / hd.size(1) ** 0.5 + linear + self.b)).squeeze(1).t()
+            #           return self.u.bmm(torch.tanh(bilinear + linear + self.b)).squeeze(1).t()
+            #           return self.u.bmm(torch.tanh(bilinear / hd.size(1) ** 0.5 + linear + self.b)).squeeze(1).t()
             normalize = lambda x: self.bn(x.view(self.nrel * self.nhid, -1).t()).t().view(self.nrel, self.nhid, -1)
             return self.u.bmm(torch.tanh(normalize(bilinear + linear + self.b))).squeeze(1).t()
         else:
@@ -120,44 +126,36 @@ class NeuralTensorLayer(nn.Module):
 
 
 class Model(nn.Module):
-
-    def __init__(self, args, vocab, rel_vocab):
+    def __init__(self, tok_vocab, rel_vocab):
         super().__init__()
-        self.idx2tok, self.tok2idx = vocab
+        self.idx2tok, self.tok2idx = tok_vocab
         self.idx2rel, self.rel2idx = rel_vocab
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
-        if args.seq_model == 'embedding':
-            self.seq_encoder = EmbeddingModel(ntok, args.ntl_ninp)
-        elif args.seq_model == 'lstm':
-            nout = args.seq_nhid
-            self.seq_encoder = LSTMModel(ntok, args.seq_ninp, args.seq_nhid, args.seq_nlayer)
-        elif args.seq_model == 'transformer':
-            nout = args.seq_ninp
-            self.seq_encoder = TransformerModel(ntok,
-                                                args.seq_ninp,
-                                                args.nhead,
-                                                args.seq_nhid,
-                                                args.seq_nlayer,
-                                                args.dropout)
+        if FLAGS.seq_model == "embedding":
+            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_ninp)
+            raise ValueError()
+        elif FLAGS.seq_model == "lstm":
+            nout = FLAGS.seq_hidden_dim
+            self.seq_encoder = LSTMModel(ntok, FLAGS.seq_ninp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers)
+        elif FLAGS.seq_model == "transformer":
+            nout = FLAGS.seq_ninp
+            self.seq_encoder = TransformerModel(
+                ntok, FLAGS.seq_ninp, FLAGS.seq_nhead, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers, FLAGS.dropout
+            )
         else:
             raise Exception()
 
-        self.bn_src = nn.BatchNorm1d(args.ntl_ninp)
-        self.bn_dst = nn.BatchNorm1d(args.ntl_ninp)
-        self.ntl = NeuralTensorLayer(args.ntl_ninp, args.ntl_nhid, nrel, args.bilinear)  # TODO scale of inner product
+        self.bn_src = nn.BatchNorm1d(FLAGS.ntl_ninp)
+        self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_ninp)
+        self.ntl = NeuralTensorLayer(FLAGS.ntl_ninp, FLAGS.ntl_hidden_dim, nrel, FLAGS.seq_bilinear)
+        # TODO(gaiyu0): scale of inner product
 
-        self.linear_src = nn.Linear(nout, args.ntl_ninp)
-        self.linear_dst = nn.Linear(nout, args.ntl_ninp)
+        self.linear_src = nn.Linear(nout, FLAGS.ntl_ninp)
+        self.linear_dst = nn.Linear(nout, FLAGS.ntl_ninp)
 
-        if args.gr:
-            self.gamma = args.gamma
-            if args.gr_model == 'rgcn':
-                self.gr_model = RGCN(ntok, args.gr_ninp, args.gr_nhid, args.ntl_ninp, nrel, num_hidden_layers=args.gr_nlayer)
-            else:
-                raise Exception()
-
-        self.args = args
+        if FLAGS.use_grpah:
+            self.gr_model = RGCN(ntok, FLAGS.graph_inp, FLAGS.graph_hidden_dim, FLAGS.ntl_ninp, nrel, num_hidden_layers=FLAGS.graph_nlayers)
 
     def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
         """
@@ -173,41 +171,28 @@ class Model(nn.Module):
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
-        i = arange(len(n)).repeat_interleave(n).repeat_interleave(n_idx)
-        j = arange(n.sum()).repeat_interleave(n_idx)
+        i = torch.arange(len(n)).repeat_interleave(n).repeat_interleave(n_idx)
+        j = torch.arange(n.sum()).repeat_interleave(n_idx)
         h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
-#       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
+        #       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 
         d = {}
         gt = logit.gt(0)
         eq = gt.eq(mask)
-        d['acc'] = eq.float().mean()
-        em, _ = scatter_min(eq.all(1).int(), arange(len(n)).repeat_interleave(n * n))
-        d['emr'] = em.float().mean()
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), torch.arange(len(n)).repeat_interleave(n * n))
+        d["emr"] = em.float().mean()
         if self.training:
-#           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
+            #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
             nll_pos = -F.logsigmoid(logit[mask]).sum() / len(n)
             nll_neg = -torch.sum(torch.log(1 + 1e-5 - logit[~mask].sigmoid())) / len(n)
-            d['loss'] = d['nll'] = self.args.w_pos * nll_pos + nll_neg
+            d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
 
             if g is not None:
                 h_ref = self.gr_model(g)
-                d['norm'] = torch.norm(h - h_ref, p=2, dim=1).mean()
-                d['loss'] = d['nll'] + self.gamma * d['norm']
+                d["norm"] = torch.norm(h - h_ref, p=2, dim=1).mean()
+                d["loss"] = d["nll"] + FLAGS.gamma * d["norm"]
 
-        return d, {'em' : em, 'rel_true' : mask, 'rel_pred' : gt, 'u' : tok[u], 'v' : tok[v]}
-
-        '''
-        logit = self.linear(self.seq_encoder(seq, masks).sum(1))
-        mask = zeros(m.sum(), len(self.idx2rel))
-        idx = arange(len(m)).repeat_interleave(m)
-        mask[idx, rel] = 1
-        mask = scatter_sum(mask, idx.unsqueeze(1), 0).clamp_max(1).bool()
-        d = {}
-        d['loss'] = d['nll'] = -F.logsigmoid(logit[mask]).mean() - (1 + 1e-5 - logit[~mask].sigmoid()).log().mean()
-        d['acc'] = logit.gt(0.5).eq(mask).float().mean()
-
-        return d, []
-        '''
+        return d, {"em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v]}
