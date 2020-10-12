@@ -21,7 +21,6 @@ setup(
 
         # PyTorch
         "datasets",
-        "dgl",
         "pytorch-lightning>=0.9.0",
         "sacremoses",
         "sentencepiece",

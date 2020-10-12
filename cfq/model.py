@@ -7,8 +7,6 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
-from cfq.rgcn import RGCN
-
 FLAGS = flags.FLAGS
 # global flags
 flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
@@ -26,12 +24,6 @@ flags.DEFINE_integer("seq_nhead", 16, "Transformer number of heads")
 # neural tensor layer flags
 flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
 flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
-
-# gnn flags
-flags.DEFINE_boolean("use_graph", False, "Use GCN?")
-flags.DEFINE_integer("graph_inp", 64, "GNN input dimension")
-flags.DEFINE_integer("graph_hidden_dim", 64, "GNN hidden dimension")
-flags.DEFINE_integer("graph_nlayers", 4, "GNN number of layers")
 
 
 class LSTMModel(nn.Module):
@@ -104,7 +96,7 @@ class NeuralTensorLayer(nn.Module):
         Parameters
         ----------
         hd : (n, d)
-        tl : (n, d)
+        tl : (n, d
 
         Returns
         -------
@@ -153,9 +145,6 @@ class Model(nn.Module):
 
         self.linear_src = nn.Linear(nout, FLAGS.ntl_ninp)
         self.linear_dst = nn.Linear(nout, FLAGS.ntl_ninp)
-
-        if FLAGS.use_grpah:
-            self.gr_model = RGCN(ntok, FLAGS.graph_inp, FLAGS.graph_hidden_dim, FLAGS.ntl_ninp, nrel, num_hidden_layers=FLAGS.graph_nlayers)
 
     def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
         """

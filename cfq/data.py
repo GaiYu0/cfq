@@ -1,12 +1,10 @@
 from absl import flags
-import dgl
 import numpy as np
 import torch
 from torch.nn.utils.rnn import pack_sequence
 from torch.utils.data.dataset import Dataset
 
 FLAGS = flags.FLAGS
-# FLAGS.seq_model, FLAGS.gr pulled from model.py
 
 
 class RaggedArray:
@@ -123,13 +121,6 @@ class CollateFunction:
 
         b["tok"] = cat("tok")
         b["cfq_idx"] = cat("cfq_idx")
-
-        if FLAGS.use_graph:
-            b["g"] = dgl.DGLGraph((b["src"], b["dst"]))
-            b["g"].ndata["tok"] = b["tok"]
-            b["g"].edata["rel_type"] = b["rel"]
-            _, inverse, counts = torch.unique(torch.stack([b["dst"], b["rel"]]), dim=1, return_inverse=True, return_counts=True)
-            b["g"].edata["norm"] = counts.float().reciprocal().unsqueeze(1)[inverse]
 
         if self.seq_model == "lstm":
             max_len = b["m"].max() + 2
