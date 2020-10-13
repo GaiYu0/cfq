@@ -4,9 +4,11 @@ set -x
 export ROOT_DIR="$(dirname "$0")/.."
 cd $ROOT_DIR
 
-conda env create -f environment.yml -n cfq || true
 eval "$(conda shell.bash hook)"
+conda create -y -n cfq
 conda activate cfq
+conda install -y -n cfq python=3.8
+conda install -y -n cfq -c conda-forge nvidia-apex mkl
 pip install -e .
 
 [ -z "$RUNNAME" ] && { echo "Need to set RUNNAME"; exit 1; }

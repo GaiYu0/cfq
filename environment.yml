@@ -5,15 +5,10 @@ channels:
 dependencies:
   - python=3.8
   - mkl
-  - numpy
-  - nvidia-apex
-  - matplotlib
-  - pandas
-  - seaborn
-  - plotnine
   - pytorch>=1.6.0
-  - pytorch-lightning>=0.9.0
-  - tensorflow-gpu>=2.1.0
+  # - tensorflow-gpu>=2.1.0
   - torchvision
   - cudatoolkit=10.2
-  - transformers
+  # - nvidia-apex
+  # - pytorch-lightning>=0.9.0
+  # - transformers

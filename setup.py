@@ -21,14 +21,14 @@ setup(
 
         # PyTorch
         "datasets",
-        "pytorch-lightning>=0.9.0",
+        "pytorch-lightning>=0.10.0",
         "sacremoses",
         "sentencepiece",
         "tensorflow-gpu>=2.1.0",
         "tokenizers",
-        "torch",
+        "torch>=1.6.0",
         "torchtext",
-        "transformers>=3.2.0",
+        "transformers>=3.3.1",
         "wandb",
     ],
     extras_require={"test": ["pytest"]}
