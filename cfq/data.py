@@ -29,8 +29,6 @@ class RaggedArray:
 class CFQDataset(Dataset):
     def __init__(self, idx, data, tok_vocab, rel_vocab):
         super().__init__()
-        self.seq_model = FLAGS.seq_model
-
         self.tok_vocab, self.rel_vocab = tok_vocab, rel_vocab
         _, tok2idx = self.tok_vocab
         ntok = len(tok2idx)
@@ -81,22 +79,21 @@ class CollateFunction:
     def __init__(self, tok_vocab, rel_vocab):
         self.tok_vocab = tok_vocab
         self.rel_vocab = rel_vocab
-        _, tok2idx = self.tok_vocab
-        _, rel2idx = self.rel_vocab
-        self.ntok = len(tok2idx)
-        self.nrel = len(rel2idx)
+        _, self.tok2idx = self.tok_vocab
+        _, self.rel2idx = self.rel_vocab
+        self.ntok = len(self.tok2idx)
+        self.nrel = len(self.rel2idx)
 
     def collate_fn(self, samples):
         b = {}
 
         max_len = max(len(s["seq"]) for s in samples)
         pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
-        if self.seq_model == "lstm":
+        if FLAGS.seq_model == "lstm":
             b["seq"] = pack_sequence([torch.from_numpy(s["seq"]) for s in samples], enforce_sorted=False)
-        elif self.seq_model == "transformer":
-            _, tok2idx = self.tok_vocab
+        elif FLAGS.seq_model == "transformer":
             b["seq"] = {
-                "tok": pad("seq", tok2idx["[PAD]"]).t(),
+                "tok": pad("seq", self.tok2idx["[PAD]"]).t(),
                 "ispad": pad("ispad", True),
                 "isconcept": pad("isconcept", False).t(),
                 "isvariable": pad("isvariable", False).t(),
@@ -122,13 +119,13 @@ class CollateFunction:
         b["tok"] = cat("tok")
         b["cfq_idx"] = cat("cfq_idx")
 
-        if self.seq_model == "lstm":
+        if FLAGS.seq_model == "lstm":
             max_len = b["m"].max() + 2
             hd = self.ntok + self.nrel
             tl = hd + 1
             b["q"] = torch.from_numpy(
                 np.vstack(
-                    [np.hstack([[hd], s["q"].reshape([-1]), 3 * (max_len - len(s["q"])) * [tok2idx["[PAD]"]], [tl]]) for s in samples]
+                    [np.hstack([[hd], s["q"].reshape([-1]), 3 * (max_len - len(s["q"])) * [self.tok2idx["[PAD]"]], [tl]]) for s in samples]
                 )
             )
         return b

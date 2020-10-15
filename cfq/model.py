@@ -125,26 +125,26 @@ class Model(nn.Module):
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         if FLAGS.seq_model == "embedding":
-            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_ninp)
+            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_inp)
             raise ValueError()
         elif FLAGS.seq_model == "lstm":
             nout = FLAGS.seq_hidden_dim
-            self.seq_encoder = LSTMModel(ntok, FLAGS.seq_ninp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers)
+            self.seq_encoder = LSTMModel(ntok, FLAGS.seq_inp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers)
         elif FLAGS.seq_model == "transformer":
-            nout = FLAGS.seq_ninp
+            nout = FLAGS.seq_inp
             self.seq_encoder = TransformerModel(
-                ntok, FLAGS.seq_ninp, FLAGS.seq_nhead, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers, FLAGS.dropout
+                ntok, FLAGS.seq_inp, FLAGS.seq_nhead, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers, FLAGS.dropout
             )
         else:
             raise Exception()
 
-        self.bn_src = nn.BatchNorm1d(FLAGS.ntl_ninp)
-        self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_ninp)
-        self.ntl = NeuralTensorLayer(FLAGS.ntl_ninp, FLAGS.ntl_hidden_dim, nrel, FLAGS.seq_bilinear)
+        self.bn_src = nn.BatchNorm1d(FLAGS.ntl_inp)
+        self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_inp)
+        self.ntl = NeuralTensorLayer(FLAGS.ntl_inp, FLAGS.ntl_hidden_dim, nrel, FLAGS.seq_bilinear)
         # TODO(gaiyu0): scale of inner product
 
-        self.linear_src = nn.Linear(nout, FLAGS.ntl_ninp)
-        self.linear_dst = nn.Linear(nout, FLAGS.ntl_ninp)
+        self.linear_src = nn.Linear(nout, FLAGS.ntl_inp)
+        self.linear_dst = nn.Linear(nout, FLAGS.ntl_inp)
 
     def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
         """
@@ -160,8 +160,8 @@ class Model(nn.Module):
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
-        i = torch.arange(len(n)).repeat_interleave(n).repeat_interleave(n_idx)
-        j = torch.arange(n.sum()).repeat_interleave(n_idx)
+        i = torch.arange(len(n)).type_as(tok).repeat_interleave(n).repeat_interleave(n_idx)
+        j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
         h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
         #       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
@@ -171,7 +171,7 @@ class Model(nn.Module):
         gt = logit.gt(0)
         eq = gt.eq(mask)
         d["acc"] = eq.float().mean()
-        em, _ = scatter_min(eq.all(1).int(), torch.arange(len(n)).repeat_interleave(n * n))
+        em, _ = scatter_min(eq.all(1).int().type_as(tok), torch.arange(len(n)).type_as(tok).repeat_interleave(n * n))
         d["emr"] = em.float().mean()
         if self.training:
             #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()

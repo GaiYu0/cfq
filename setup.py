@@ -30,6 +30,7 @@ setup(
         "torchtext",
         "transformers>=3.3.1",
         "wandb",
+        "torch-scatter>=2.0.5"
     ],
     extras_require={"test": ["pytest"]}
 )

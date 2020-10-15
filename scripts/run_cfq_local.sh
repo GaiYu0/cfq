@@ -7,8 +7,9 @@ cd $ROOT_DIR
 eval "$(conda shell.bash hook)"
 conda create -y -n cfq
 conda activate cfq
-conda install -y -n cfq python=3.8
-conda install -y -n cfq -c conda-forge nvidia-apex mkl
+conda install -y -n cfq python=3.8 mkl tensorflow-gpu
+conda install -y -n cfq pytorch torchvision cudatoolkit=10.1 -c pytorch
+pip install torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
 pip install -e .
 
 [ -z "$RUNNAME" ] && { echo "Need to set RUNNAME"; exit 1; }
@@ -41,15 +42,4 @@ export CFQ_DIR="data/cfq"
 
 mkdir -p "$OUTPUT_DIR"
 
-python3 diffdnn/run_glue_pl.py --gpus 8 \
-    --data_dir $DATA_DIR \
-    --task $TASK \
-    --model_name_or_path $BERT_MODEL \
-    --output_dir $OUTPUT_DIR \
-    --max_seq_length  $MAX_LENGTH \
-    --learning_rate $LEARNING_RATE \
-    --num_train_epochs $NUM_EPOCHS \
-    --train_batch_size $BATCH_SIZE \
-    --seed $SEED \
-    --do_train \
-    --do_predict
+python cfq/train.py --run_name "$RUNNAME"
