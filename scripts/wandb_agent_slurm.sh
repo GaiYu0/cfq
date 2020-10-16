@@ -1,4 +1,12 @@
 #!/bin/bash
+#SBATCH --job-name=cfq_train
+#SBATCH --output=/home/eecs/paras/slurm/cfq/%j.log
+#SBATCH --ntasks=1
+#SBATCH --mem=50000
+#SBATCH --gres="gpu:1"
+#SBATCH --time=125:00:00
+#SBATCH --exclude=atlas,blaze,r16
+
 set -x
 export ROOT_DIR="$(dirname "$0")/.."
 cd $ROOT_DIR

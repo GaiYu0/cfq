@@ -15,7 +15,6 @@ flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
 
 # sequence model flags
 flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
-flags.DEFINE_boolean("seq_bilinear", False, "Sequence model is bilinear?")
 flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
 flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
 flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
@@ -24,6 +23,7 @@ flags.DEFINE_integer("seq_nhead", 16, "Transformer number of heads")
 # neural tensor layer flags
 flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
 flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
+flags.DEFINE_boolean("ntl_bilinear", False, "Sequence model is bilinear?")
 
 
 class LSTMModel(nn.Module):
@@ -140,7 +140,7 @@ class Model(nn.Module):
 
         self.bn_src = nn.BatchNorm1d(FLAGS.ntl_inp)
         self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_inp)
-        self.ntl = NeuralTensorLayer(FLAGS.ntl_inp, FLAGS.ntl_hidden_dim, nrel, FLAGS.seq_bilinear)
+        self.ntl = NeuralTensorLayer(FLAGS.ntl_inp, FLAGS.ntl_hidden_dim, nrel, FLAGS.ntl_bilinear)
         # TODO(gaiyu0): scale of inner product
 
         self.linear_src = nn.Linear(nout, FLAGS.ntl_inp)

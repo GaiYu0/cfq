@@ -21,6 +21,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string("run_dir_root", str(RUN_DIR_ROOT), "Output run directory (root)")
 flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_name).")
 flags.DEFINE_string("run_name", str(datetime.now()), "Unique run ID")
+flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
 flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_integer("num_workers", 8, "Total number of workers.", lower_bound=1)
@@ -134,9 +135,9 @@ class CFQTrainer(pl.LightningModule):
 
 def main(argv):
     pl.seed_everything(FLAGS.seed)
-    log_dir = Path(FLAGS.run_dir_root) / (FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name)
+    log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name, str(datetime.now()))
     logger.info(f"Saving logs to {log_dir}")
-    log_dir.mkdir(parents=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     # load vocab
     tok_vocab = pickle.load(open(FLAGS.tok_vocab_path, "rb"))
@@ -151,7 +152,7 @@ def main(argv):
     lr_logger = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger(
         entity="cfq",
-        project=f"cfq_pl_nopretrain_{FLAGS.cfq_split}",
+        project=f"{FLAGS.wandb_project}_{FLAGS.cfq_split}",
         name=FLAGS.run_name,
         save_dir=str(DATA_DIR),
         log_model=True,
