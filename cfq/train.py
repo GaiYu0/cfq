@@ -19,6 +19,7 @@ from cfq.data import CFQDataset, CollateFunction
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("run_dir_root", str(RUN_DIR_ROOT), "Output run directory (root)")
+flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_name).")
 flags.DEFINE_string("run_name", str(datetime.now()), "Unique run ID")
 
 flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
@@ -30,11 +31,12 @@ flags.DEFINE_boolean("debug", False, "Use pytorch-lighting quick smoke test (fas
 
 flags.DEFINE_enum("optimizer_name", "Adam", ["Adam", "SGD"], "Optimizer name.")
 flags.DEFINE_integer("batch_size", 64, "Total batch size.", lower_bound=1)
-flags.DEFINE_float("lr", 1e-3, "Learning rate.", lower_bound=0)
-flags.DEFINE_integer("lr_num_warmup_steps", 0, "Warmup steps to peak.", lower_bound=0)
-flags.DEFINE_integer("lr_num_training_steps", 0, "Total training steps for LR scheduler.", lower_bound=0)
 flags.DEFINE_float("gradient_clip_val", 0.0, "Gradient scale value.")
+flags.DEFINE_float("lr", 1e-3, "Learning rate.", lower_bound=0)
+flags.DEFINE_integer("warmup_epochs", 5, "Warmup steps to peak, set to None to disable LR scheduler.", lower_bound=0)
 flags.DEFINE_integer("num_epochs", 100, "Number of training epochs.", lower_bound=1)
+flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lower_bound=0)
+#  0 = constant, 0.5 = cosine decay, 1.5 = two cycle cosine LR schedule
 
 flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "vocab.pickle"), "Token vocab path")
 flags.DEFINE_string("rel_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
@@ -78,6 +80,9 @@ class CFQDataModule(pl.LightningDataModule):
         self.dev_dataset = CFQDataset(split_data["devIdxs"], data, self.tok_vocab, self.rel_vocab)
         self.test_dataset = CFQDataset(split_data["testIdxs"], data, self.tok_vocab, self.rel_vocab)
 
+    def train_step_count_per_epoch(self):
+        return len(self.train_dataset)
+
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
 
@@ -108,7 +113,7 @@ class CFQTrainer(pl.LightningModule):
         with torch.no_grad():
             out_d, out_dict = self.model(**placed_batch)
         self.log_dict({"{}/{}".format(key, k): v for k, v in out_d.items()}, on_epoch=True, prog_bar=True)
-        return out_d["acc"]
+        return out_d["emr"]
 
     def test_step(self, batch, batch_idx):
         placed_batch = {k: v.to(self.device) for k, v in batch.items()}
@@ -120,13 +125,16 @@ class CFQTrainer(pl.LightningModule):
     def configure_optimizers(self):
         optim_def = getattr(torch.optim, FLAGS.optimizer_name)
         optimizer = optim_def(self.parameters(), lr=FLAGS.lr)
-        scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, FLAGS.lr_num_warmup_steps, FLAGS.lr_num_training_steps)
-        return [optimizer], [scheduler]
+        if FLAGS.warmup_epochs is None:
+            return optimizer
+        else:
+            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, FLAGS.warmup_epochs, FLAGS.num_epochs + 1)
+            return [optimizer], [scheduler]
 
 
 def main(argv):
     pl.seed_everything(FLAGS.seed)
-    log_dir = Path(FLAGS.run_dir_root) / FLAGS.run_name
+    log_dir = Path(FLAGS.run_dir_root) / (FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name)
     logger.info(f"Saving logs to {log_dir}")
     log_dir.mkdir(parents=True)
 
@@ -139,7 +147,7 @@ def main(argv):
     model = CFQTrainer(tok_vocab, rel_vocab)
 
     # configure loggers and checkpointing
-    checkpoint_callback = ModelCheckpoint(monitor="val_emr", save_top_k=-1, save_last=True, mode="max")
+    checkpoint_callback = ModelCheckpoint(monitor="valid/emr", save_top_k=-1, save_last=True, mode="max")
     lr_logger = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger(
         entity="cfq",
@@ -160,7 +168,6 @@ def main(argv):
         benchmark=not FLAGS.debug,
         # logging
         log_gpu_memory="all",
-        track_grad_norm=2,
         default_root_dir=log_dir,
         logger=wandb_logger,
         callbacks=[lr_logger],
