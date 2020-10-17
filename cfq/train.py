@@ -18,9 +18,10 @@ from cfq.data import CFQDataset, CollateFunction
 
 
 FLAGS = flags.FLAGS
+flags.DEFINE_boolean("sweep_mode", False, "Set to true to enable wandb sweep mode.")
 flags.DEFINE_string("run_dir_root", str(RUN_DIR_ROOT), "Output run directory (root)")
 flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_name).")
-flags.DEFINE_string("run_name", str(datetime.now()), "Unique run ID")
+flags.DEFINE_string("run_name", None, "Unique run ID")
 flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
 flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
@@ -135,7 +136,9 @@ class CFQTrainer(pl.LightningModule):
 
 def main(argv):
     pl.seed_everything(FLAGS.seed)
-    log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name, str(datetime.now()))
+    rundir_name = FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name
+    timestamp = str(datetime.now().strftime("%m%d%Y_%H%M"))
+    log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(rundir_name, timestamp)
     logger.info(f"Saving logs to {log_dir}")
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -153,8 +156,8 @@ def main(argv):
     wandb_logger = WandbLogger(
         entity="cfq",
         project=f"{FLAGS.wandb_project}_{FLAGS.cfq_split}",
-        name=FLAGS.run_name,
-        save_dir=str(DATA_DIR),
+        name=FLAGS.run_name if not FLAGS.sweep_mode else None,  # wandb will autogenerate a sweep name
+        save_dir=str(log_dir),
         log_model=True,
     )
     wandb_logger.watch(model, log="all", log_freq=100)
@@ -168,7 +171,6 @@ def main(argv):
         accelerator="ddp" if torch.cuda.device_count() > 1 else None,
         benchmark=not FLAGS.debug,
         # logging
-        log_gpu_memory="all",
         default_root_dir=log_dir,
         logger=wandb_logger,
         callbacks=[lr_logger],
