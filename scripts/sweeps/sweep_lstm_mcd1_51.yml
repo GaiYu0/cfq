@@ -21,9 +21,14 @@ parameters:
   optimizer_name:
     value: Adam
   batch_size:
-    value: 64
+    distribution: categorical
+    values:
+    - 64
+    - 128
   lr:
-    value: 0.001
+    distribution: uniform
+    min: 0.0001
+    max: 0.005
 
   # training parameters to sweep
   warmup_epochs:

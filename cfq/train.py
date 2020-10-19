@@ -105,29 +105,16 @@ class CFQTrainer(pl.LightningModule):
         raise NotImplementedError()
 
     def place_batch(self, batch):
-        return batch
-        placed_batch = {}
-        for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                placed_batch[k] = v.to(self.device)
-            elif isinstance(v, tuple):
-                placed_batch[k] = torch.as_tensor(v, device=self.device, dtype=v[0].dtype)
-            else:
-                raise ValueError()
-        return placed_batch
+        return {k: v.to(self.device) for k, v in batch.items()}
 
     def compute_f1(self, rel_true, rel_pred):
         p, r, f1, _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
         return p, r, f1
 
     def training_step(self, batch, batch_idx):
-        out_d, out_dict = self.model(**self.place_batch(batch))
+        placed_batch = self.place_batch(batch)
+        out_d, out_dict = self.model(**placed_batch)
         self.log_dict({"train/{}".format(k): v for k, v in out_d.items()})
-        # must log separately to log epoch averages
-        prec, recall, f1 = self.compute_f1(out_dict['rel_true'].cpu().numpy(), out_dict['rel_pred'].cpu().numpy())
-        self.log("train/precision", prec, on_epoch=True)
-        self.log("train/recall", recall, on_epoch=True)
-        self.log("train/f1", f1, on_epoch=True)
         return out_d["loss"]
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
