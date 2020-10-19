@@ -38,10 +38,10 @@ pip install -e .
 
 # load dataset to data dir
 export CFQ_DIR="data/cfq"
-export DATA_CACHE="/dev/shm/cfq"
 [[ -d $CFQ_DIR ]] || (python scripts/download_cfq.py --data_dir $CFQ_DIR)
 
 # load data to cache
+export DATA_CACHE="/data/paras/data_cache/cfq"
 mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
 rsync -avhW --no-compress --progress $CFQ_DIR $DATA_CACHE

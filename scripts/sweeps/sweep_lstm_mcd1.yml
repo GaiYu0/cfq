@@ -3,6 +3,9 @@ method: bayes
 metric:
   name: valid/emr
   goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 9
 parameters:
   # configurable parameters
   sweep_mode:
@@ -10,7 +13,7 @@ parameters:
   wandb_project:
     value: cfq_sweep_lstm
   run_dir_root:  # cache data in RAM
-    value: /dev/shm/cfq
+    value: /data/paras/data_cache/cfq
   num_epochs:
     value: 100
   seq_model:
@@ -39,7 +42,7 @@ parameters:
   cosine_lr_period:
     distribution: uniform
     min: 0
-    max: 1.5
+    max: 0.5
 
   # architectural parameters to sweep
   gamma:
@@ -57,10 +60,10 @@ parameters:
   seq_inp:
     distribution: categorical
     values:
+    - 32
     - 64
     - 128
     - 256
-    - 512
   seq_hidden_dim:
     distribution: categorical
     values:
@@ -68,7 +71,6 @@ parameters:
     - 64
     - 128
     - 256
-    - 512
   seq_nlayers:
     distribution: int_uniform
     min: 1
@@ -76,18 +78,21 @@ parameters:
   seq_nhead:
     distribution: categorical
     values:
+    - 4
     - 8
     - 16
     - 32
   ntl_inp:
     distribution: categorical
     values:
+    - 32
     - 64
     - 128
     - 256
   ntl_hidden_dim:
     distribution: categorical
     values:
+    - 32
     - 64
     - 128
     - 256

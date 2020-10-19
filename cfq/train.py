@@ -137,7 +137,7 @@ class CFQTrainer(pl.LightningModule):
 def main(argv):
     pl.seed_everything(FLAGS.seed)
     rundir_name = FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name
-    timestamp = str(datetime.now().strftime("%m%d%Y_%H%M"))
+    timestamp = str(datetime.now().strftime("%m%d%y_%H%M%S"))
     log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(rundir_name, timestamp)
     logger.info(f"Saving logs to {log_dir}")
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -151,13 +151,13 @@ def main(argv):
     model = CFQTrainer(tok_vocab, rel_vocab)
 
     # configure loggers and checkpointing
-    checkpoint_callback = ModelCheckpoint(monitor="valid/emr", save_top_k=-1, save_last=True, mode="max")
+    checkpoint_callback = ModelCheckpoint(monitor="valid/emr", save_top_k=5, save_last=True, mode="max")
     lr_logger = LearningRateMonitor(logging_interval="step")
     wandb_logger = WandbLogger(
         entity="cfq",
         project=f"{FLAGS.wandb_project}_{FLAGS.cfq_split}",
         name=FLAGS.run_name if not FLAGS.sweep_mode else None,  # wandb will autogenerate a sweep name
-        save_dir=str(log_dir),
+        save_dir=str(FLAGS.run_dir_root),
         log_model=True,
     )
     wandb_logger.watch(model, log="all", log_freq=100)
@@ -171,6 +171,8 @@ def main(argv):
         accelerator="ddp" if torch.cuda.device_count() > 1 else None,
         benchmark=not FLAGS.debug,
         # logging
+        log_every_n_steps=10,
+        flush_logs_every_n_steps=250,
         default_root_dir=log_dir,
         logger=wandb_logger,
         callbacks=[lr_logger],
