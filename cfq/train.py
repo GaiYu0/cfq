@@ -8,6 +8,7 @@ import pickle
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from sklearn.metrics import precision_recall_fscore_support
 import torch
 from torch.utils.data import DataLoader
 import transformers
@@ -103,24 +104,43 @@ class CFQTrainer(pl.LightningModule):
     def forward(self, x):
         raise NotImplementedError()
 
+    def place_batch(self, batch):
+        return batch
+        placed_batch = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                placed_batch[k] = v.to(self.device)
+            elif isinstance(v, tuple):
+                placed_batch[k] = torch.as_tensor(v, device=self.device, dtype=v[0].dtype)
+            else:
+                raise ValueError()
+        return placed_batch
+
+    def compute_f1(self, rel_true, rel_pred):
+        p, r, f1, _ = precision_recall_fscore_support(rel_true, rel_pred, average='macro')
+        return p, r, f1
+
     def training_step(self, batch, batch_idx):
-        placed_batch = {k: v.to(self.device) for k, v in batch.items()}
-        out_d, out_dict = self.model(**placed_batch)
+        out_d, out_dict = self.model(**self.place_batch(batch))
         self.log_dict({"train/{}".format(k): v for k, v in out_d.items()})
+        # must log separately to log epoch averages
+        prec, recall, f1 = self.compute_f1(out_dict['rel_true'].cpu().numpy(), out_dict['rel_pred'].cpu().numpy())
+        self.log("train/precision", prec, on_epoch=True)
+        self.log("train/recall", recall, on_epoch=True)
+        self.log("train/f1", f1, on_epoch=True)
         return out_d["loss"]
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         key = "valid" if dataloader_idx == 0 else "test"
-        placed_batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
-            out_d, out_dict = self.model(**placed_batch)
+            out_d, out_dict = self.model(**self.place_batch(batch))
+        out_d['precision'], out_d['recall'], out_d['f1'] = self.compute_f1(out_dict['rel_true'].cpu().numpy(), out_dict['rel_pred'].cpu().numpy())
         self.log_dict({"{}/{}".format(key, k): v for k, v in out_d.items()}, on_epoch=True, prog_bar=True)
         return out_d["emr"]
 
     def test_step(self, batch, batch_idx):
-        placed_batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
-            out_d, out_dict = self.model(**placed_batch)
+            out_d, out_dict = self.model(**self.place_batch(batch))
         self.log_dict({"test/{}".format(k): v for k, v in out_d.items()}, on_epoch=True)
         return out_d["acc"]
 

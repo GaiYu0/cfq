@@ -1,13 +1,9 @@
 # set of hyperparameters that Yu used to achieve ~51% MCD1 performance
-
 program: cfq/train.py
 method: bayes
 metric:
   name: valid/emr
   goal: maximize
-# early_terminate:
-#   type: hyperband
-#   min_iter: 9
 parameters:
   # configurable parameters
   sweep_mode:
@@ -55,7 +51,6 @@ parameters:
   seq_nhead:
     distribution: categorical
     values:
-    - 0
     - 1
     - 2
     - 4
