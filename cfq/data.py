@@ -1,7 +1,11 @@
 from absl import flags
 import numpy as np
+from loguru import logger
+from pathlib import Path
+import pytorch_lightning as pl
 import torch
 from torch.nn.utils.rnn import pack_sequence
+from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 
 FLAGS = flags.FLAGS
@@ -129,3 +133,37 @@ class CollateFunction:
                 )
             )
         return b
+
+
+class CFQDataModule(pl.LightningDataModule):
+    def __init__(self, batch_size: int, tok_vocab, rel_vocab):
+        super().__init__()
+        self.batch_size = batch_size
+        self.tok_vocab = tok_vocab
+        self.rel_vocab = rel_vocab
+        collate_fn = CollateFunction(tok_vocab, rel_vocab)
+        self.data_kwargs = {"num_workers": FLAGS.num_workers, "collate_fn": collate_fn.collate_fn, "pin_memory": True}
+
+    def setup(self, stage=None):
+        logger.info(f"Initializing dataset at stage {stage}")
+        _, tok2idx = self.tok_vocab
+        _, rel2idx = self.rel_vocab
+        data = np.load(FLAGS.cfq_data_path)
+        split_data_dir_path = Path(FLAGS.cfq_split_data_dir) / f"{FLAGS.cfq_split}.npz"
+        logger.info(f"Loading data from {split_data_dir_path}")
+        split_data = np.load(split_data_dir_path)
+        self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.rel_vocab)
+        self.dev_dataset = CFQDataset(split_data["devIdxs"], data, self.tok_vocab, self.rel_vocab)
+        self.test_dataset = CFQDataset(split_data["testIdxs"], data, self.tok_vocab, self.rel_vocab)
+
+    def train_step_count_per_epoch(self):
+        return len(self.train_dataset)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
+
+    def val_dataloader(self):
+        return DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
