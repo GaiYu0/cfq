@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
+from transformers import AutoModel
 
 FLAGS = flags.FLAGS
 # global flags
@@ -14,7 +15,8 @@ flags.DEFINE_float("w_pos", 1.0, "Positional weight.", lower_bound=0.0, upper_bo
 flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
 
 # sequence model flags
-flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
+flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer", "bert"], "Sequence model implementation.")
+flags.DEFINE_string("bert_model_version", "bert-base-uncased", "Pre-trained transformers model for transfer learning.")
 flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
 flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
 flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
@@ -125,7 +127,6 @@ class Model(nn.Module):
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         if FLAGS.seq_model == "embedding":
-            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_inp)
             raise ValueError()
         elif FLAGS.seq_model == "lstm":
             nout = FLAGS.seq_hidden_dim
@@ -135,6 +136,9 @@ class Model(nn.Module):
             self.seq_encoder = TransformerModel(
                 ntok, FLAGS.seq_inp, FLAGS.seq_nhead, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers, FLAGS.dropout
             )
+        elif FLAGS.seq_model == "bert":
+            self.seq_encoder = AutoModel.from_pretrained(FLAGS.bert_model_version)
+
         else:
             raise Exception()
 
@@ -155,8 +159,8 @@ class Model(nn.Module):
         tok : (n.sum(),)
         n_idx : (n.sum(),)
         idx : (n_idx.sum(),)
-        m : (n,)
-        src : (m.sum(),)
+            m : (n,)
+            src : (m.sum(),)
         dst : (m.sum(),)
         rel : (m.sum(),)
         """
@@ -164,7 +168,6 @@ class Model(nn.Module):
         j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
         h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
-        #       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 
         d = {}
@@ -174,7 +177,6 @@ class Model(nn.Module):
         em, _ = scatter_min(eq.all(1).int().type_as(tok), torch.arange(len(n)).type_as(tok).repeat_interleave(n * n))
         d["emr"] = em.float().mean()
         if self.training:
-            #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
             nll_pos = -F.logsigmoid(logit[mask]).sum() / len(n)
             nll_neg = -torch.sum(torch.log(1 + 1e-5 - logit[~mask].sigmoid())) / len(n)
             d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
