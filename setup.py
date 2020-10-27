@@ -24,7 +24,6 @@ setup(
         "pytorch-lightning>=0.10.0",
         "sacremoses",
         "sentencepiece",
-        "tensorflow-gpu>=2.1.0",
         "tokenizers",
         "torch>=1.6.0",
         "torchtext",

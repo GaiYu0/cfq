@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
-from torch_scatter import scatter_min, scatter_sum
 from transformers import AutoModel
+from torch_scatter import scatter_min, scatter_sum
 
 FLAGS = flags.FLAGS
 # global flags

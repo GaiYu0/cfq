@@ -5,12 +5,17 @@ cd $ROOT_DIR
 
 eval "$(conda shell.bash hook)"
 
-conda create -y -n cfq python=3.8
+if conda env list | grep -q "^cfq"; then
+    echo "Using previously created cfq environment"
+    conda install -y mamba -c conda-forge
+    mamba env update -n cfq --file environment.yml
+else
+    echo "Creating new cfq environment"
+    conda install -y mamba -c conda-forge
+    mamba env create -n cfq --file environment.yml
+fi
 conda activate cfq
-conda install -y -n cfq mamba -c conda-forge
-mamba install -y python=3.8 mkl tensorflow-gpu
-mamba install -y pytorch torchvision cudatoolkit=10.1 -c pytorch
-pip install torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
+pip install --no-cache torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
 pip install -e .
 
 # load dataset to data dir
