@@ -43,4 +43,5 @@ python cfq/train.py \
     --num_epochs $N_EPOCHS \
     --warmup_epochs $WARMUP_EPOCHS \
     --cosine_lr_period $COSINE_LR_PERIOD \
+    --seq_model transformer \
     --cfq_split "$CFQ_SPLIT"

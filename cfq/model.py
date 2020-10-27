@@ -138,7 +138,6 @@ class Model(nn.Module):
             )
         elif FLAGS.seq_model == "bert":
             self.seq_encoder = AutoModel.from_pretrained(FLAGS.bert_model_version)
-
         else:
             raise Exception()
 
@@ -166,7 +165,9 @@ class Model(nn.Module):
         """
         i = torch.arange(len(n)).type_as(tok).repeat_interleave(n).repeat_interleave(n_idx)
         j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
-        h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
+        encoder_out = self.seq_encoder(seq)
+        print(i.shape, j.shape, encoder_out.shape)
+        h = scatter_sum(encoder_out[i, idx, :], j, 0)
 
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 
