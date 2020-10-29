@@ -5,11 +5,19 @@ cd $ROOT_DIR
 
 eval "$(conda shell.bash hook)"
 
-conda create -y -n cfq
+if ! command -v mamba &> /dev/null; then
+    conda install -y mamba -c conda-forge
+fi
+
+if conda env list | grep -q "^cfq "; then
+    echo "Using previously created cfq environment"
+    mamba env update -n cfq --file environment.yml
+else
+    echo "Creating new cfq environment"
+    mamba env create -n cfq --file environment.yml
+fi
 conda activate cfq
-conda install -y -n cfq python=3.8 mkl tensorflow-gpu
-conda install -y -n cfq pytorch torchvision cudatoolkit=10.1 -c pytorch
-pip install torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
+pip install --no-cache torch-scatter==latest+cu102 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
 pip install -e .
 
 # load dataset to data dir
@@ -43,5 +51,6 @@ python cfq/train.py \
     --num_epochs $N_EPOCHS \
     --warmup_epochs $WARMUP_EPOCHS \
     --cosine_lr_period $COSINE_LR_PERIOD \
-    --seq_model transformer \
+    --seq_model bert \
+    --bert_model_version bert-base-uncased \
     --cfq_split "$CFQ_SPLIT"

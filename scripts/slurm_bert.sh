@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=cfq_tune_wandb
+#SBATCH --job-name=cfq_train_bert
 #SBATCH --output=/home/eecs/paras/slurm/cfq/%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
-#SBATCH --mem=50000
-#SBATCH --gres="gpu:1"
+#SBATCH --mem=200000
+#SBATCH --gres="gpu:4"
 #SBATCH --time=125:00:00
 #SBATCH --exclude=atlas,blaze,r16,freddie
 
@@ -52,10 +52,9 @@ mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
 rsync -avhW --no-compress --progress $CFQ_DIR $DATA_CACHE
 
-# load wandb parameters
-export NJOBS=${NJOBS:-16}
-[ -z "$SWEEPID" ] && { echo "Need to set SWEEPID"; exit 1; }
-echo "SWEEPID = $SWEEPID"
-
-# load arguments for training
-wandb agent --count $NJOBS $SWEEPID
+# train!
+[ -z "$FLAGFILE" ] && { echo "Need to set FLAGFILE"; exit 1; }
+python cfq/train.py \
+    --run_dir_root "$RUN_CACHE" \
+    --data_root_path "$DATA_CACHE" \
+    --flagfile "$FLAGFILE"

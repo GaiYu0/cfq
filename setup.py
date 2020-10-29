@@ -31,5 +31,5 @@ setup(
         "wandb",
         "torch-scatter>=2.0.5"
     ],
-    extras_require={"test": ["pytest"]}
+    extras_require={"test": ["pytest","ipython", "jupyter_console"]}
 )

@@ -10,7 +10,7 @@ dependencies:
 - pytorch=1.6.0
 - torchvision
 - torchtext
-- cudatoolkit=10.2
+- cudatoolkit=10.1
 - cudnn
 - nccl
 - transformers
