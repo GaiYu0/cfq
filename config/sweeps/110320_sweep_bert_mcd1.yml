@@ -1,0 +1,74 @@
+program: cfq/train.py
+method: bayes
+metric:
+  name: valid/emr
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 9
+parameters:
+  cfq_split:
+    value: mcd1
+  wandb_project:
+    value: cfq_sweep_bert
+  
+  # configure wandb agent
+  sweep_mode:
+    value: True
+  run_dir_root:
+    value: /data/paras/data_cache/cfq
+  data_root_path:
+    value: /data/paras/data_cache/cfq
+  
+  # optimization params
+  optimizer_name:
+    value: Adam
+  seed:
+    value: 2
+  batch_size:
+    distribution: categorical
+    values:
+    - 32
+    - 64
+
+  # LR schedule
+  lr:
+    distribution: uniform
+    min: 0.00001
+    max: 0.0001
+  num_epochs:
+    value: 100
+  warmup_epochs:
+    distribution: int_uniform
+    min: 0
+    max: 20
+  cosine_lr_period:
+    distribution: categorical
+    values:
+    - 0.0
+    - 0.5
+
+  # architectural parameters to sweep
+  seq_model:
+    value: bert
+  bert_model_version:
+    value: bert-base-cased
+  ntl_inp:
+    value: 64
+  ntl_hidden_dim:
+    value: 64
+  ntl_bilinear:
+    value: True
+  
+  # architectural weights
+  dropout:
+    distribution: categorical
+    values:
+    - 0.0
+    - 0.5
+  gamma:
+    value: 1.0
+  w_pos:
+    distribution: uniform
+    min: 0.75
+    max: 1.0

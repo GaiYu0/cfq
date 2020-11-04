@@ -161,8 +161,7 @@ def main(argv):
         with flag_save_file.open('w') as f:
             key_flags = FLAGS.get_key_flags_for_module(sys.argv[0])
             f.write('\n'.join(f.serialize() for f in key_flags))
-        wandb_logger.experiment.save(str(flag_save_file))
-
+        # TODO(parasj): Save these files in the logdir to wandb
     else:
         lr_logger = []
         checkpoint_callback = None

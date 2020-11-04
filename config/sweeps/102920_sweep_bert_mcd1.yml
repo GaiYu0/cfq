@@ -10,7 +10,7 @@ parameters:
   run_dir_root:  # cache data in RAM
     value: /data/paras/data_cache/cfq
   data_root_path:
-    value: /data/paras/data_cache/cfq/cfq
+    value: /data/paras/data_cache/cfq
   num_epochs:
     value: 100
   seq_model:

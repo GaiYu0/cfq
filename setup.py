@@ -28,7 +28,7 @@ setup(
         "torch>=1.6.0",
         "torchtext",
         "transformers>=3.3.1",
-        "wandb",
+        "wandb==0.10.3",
         "torch-scatter>=2.0.5"
     ],
     extras_require={"test": ["pytest","ipython", "jupyter_console"]}

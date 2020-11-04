@@ -10,6 +10,10 @@
 
 set -x
 
+# check arguments
+export NJOBS=${NJOBS:-4}
+[ -z "$SWEEPID" ] && { echo "Need to set SWEEPID"; exit 1; }
+
 date;hostname;pwd
 free -mh
 df -h
@@ -29,8 +33,7 @@ if ! command -v mamba &> /dev/null; then
     conda install -y mamba -c conda-forge
 fi
 
-export ENV_UUID=
-export ENV_NAME="cfq_`(echo $CUDA_VISIBLE_DEVICES | cut -d, -f1)`"
+export ENV_NAME="cfq_wandb_`(echo $CUDA_VISIBLE_DEVICES | cut -d, -f1)`"
 echo "Conda env name = $ENV_NAME"
 if conda env list | grep -q "^$ENV_NAME "; then
     echo "Using previously created cfq environment $ENV_NAME"
@@ -52,10 +55,5 @@ mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
 rsync -avhW --no-compress --progress $CFQ_DIR $DATA_CACHE
 
-# load wandb parameters
-export NJOBS=${NJOBS:-16}
-[ -z "$SWEEPID" ] && { echo "Need to set SWEEPID"; exit 1; }
 echo "SWEEPID = $SWEEPID"
-
-# load arguments for training
 wandb agent --count $NJOBS $SWEEPID
