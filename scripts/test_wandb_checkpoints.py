@@ -26,7 +26,7 @@ def download_all_runs(entity, project, run_id):
     checkpoints = [file for file in run.files() if file.name.endswith(".ckpt")]
     out_files = []
     for file in tqdm(checkpoints, desc="Download checkpoints"):
-        file.download(root=str(root.resolve()), replace=True)
+#       file.download(root=str(root.resolve()), replace=True)
         out_files.append(root / file.name)
     return run.config, out_files
 
@@ -38,8 +38,12 @@ def main(unused_argv):
     results = {}
     for checkpoint in tqdm(outputs, desc="Evaluating checkpoints"):
         logger.info(f"Evaluating checkpoint {checkpoint}")
+        try:
+            del config['run_dir_root']
+        except KeyError:
+            pass
         args = ' '.join([f"--{k} {v}" for k, v in config.items() if k not in skipped_hparams])
-        cmd = f"python3 {root_dir} --mode test --resume_from_checkpoint '{checkpoint}' {args}"
+        cmd = f"PYTHONPATH=..:$PYTHONPATH MKL_THREADING_LAYER=GNU python3 {root_dir} --mode test --dump_test_pred --resume_from_checkpoint '{checkpoint}' {args}"
         results[checkpoint] = subprocess.check_output(cmd, shell=True)
     with open('/tmp/results_out.json', 'wb') as f:
         json.dump(results, f)

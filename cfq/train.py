@@ -2,6 +2,7 @@ from absl import app
 from absl import flags
 from datetime import datetime
 from loguru import logger
+import numpy as np
 from pathlib import Path
 import pickle
 import pytorch_lightning as pl
@@ -68,12 +69,15 @@ flags.DEFINE_enum(
     "CFQ data split to train with.",
 )
 
+flags.DEFINE_bool("dump_test_pred", False, "Whether to dump test predictions.")
+
 
 class CFQTrainer(pl.LightningModule):
     def __init__(self, tok_vocab, rel_vocab, last_epoch=-1):
         super().__init__()
         self.last_epoch = last_epoch
         self.model = Model(tok_vocab, rel_vocab)
+        self.test_dict = {}
 
     def forward(self, x):
         raise NotImplementedError()
@@ -105,6 +109,13 @@ class CFQTrainer(pl.LightningModule):
         with torch.no_grad():
             out_d, out_dict = self.model(**self.place_batch(batch))
         self.log_dict({"test/{}".format(k): v for k, v in out_d.items()}, on_epoch=True)
+
+        if FLAGS.dump_test_pred:
+            if self.test_dict:
+                self.test_dict = {k : torch.cat([self.test_dict[k], v.cpu()], 0) for k, v in out_dict.items()}
+            else:
+                self.test_dict = {k : v.cpu() for k, v in out_dict.items()}
+
         return out_d["acc"]
 
     def configure_optimizers(self):
@@ -183,6 +194,8 @@ def main(argv):
     result = trainer.test(model, datamodule=data_module)
     logger.info(f"Result of evaluation: {result}")
 
+    if FLAGS.dump_test_pred:
+        np.savez(log_dir / "test_dict.npz", **{k : v.numpy() for k, v in model.test_dict.items()})
 
 if __name__ == "__main__":
     app.run(main)

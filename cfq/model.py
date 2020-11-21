@@ -184,4 +184,4 @@ class Model(nn.Module):
                 d["norm"] = torch.norm(h - h_ref, p=2, dim=1).mean()
                 d["loss"] = d["nll"] + FLAGS.gamma * d["norm"]
 
-        return d, {"em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v]}
+        return d, {"cfq_idx" : kwargs['cfq_idx'], "n" : n, "em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v], "logit" : logit}
