@@ -32,7 +32,6 @@ class LSTMModel(nn.Module):
         self.ninp = ninp
         self.tok_encoder = nn.Embedding(ntok, ninp)
         self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
-        self.pos_encoder = PositionalEncoding(ninp, 0.0)
 
     def forward(self, seq):
         apply_out = PackedSequence(self.tok_encoder(seq.data), seq.batch_sizes, seq.sorted_indices, seq.unsorted_indices)
@@ -183,5 +182,65 @@ class Model(nn.Module):
                 h_ref = self.gr_model(g)
                 d["norm"] = torch.norm(h - h_ref, p=2, dim=1).mean()
                 d["loss"] = d["nll"] + FLAGS.gamma * d["norm"]
+
+        return d, {"cfq_idx" : kwargs['cfq_idx'], "n" : n, "em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v], "logit" : logit}
+
+
+class InvariantModel(nn.Module):
+    def __init__(self, tok_vocab, rel_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2rel, self.rel2idx = rel_vocab
+        ntok, nrel = len(self.idx2tok), len(self.idx2rel)
+
+        self.tok_encoder = nn.Embedding(ntok, ninp)
+        self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
+
+        self.bn_src = nn.BatchNorm1d(FLAGS.ntl_inp)
+        self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_inp)
+        self.ntl = NeuralTensorLayer(FLAGS.ntl_inp, FLAGS.ntl_hidden_dim, nrel, FLAGS.ntl_bilinear)
+
+        nout = FLAGS.seq_hidden_dim
+        self.linear_src = nn.Linear(nout, FLAGS.ntl_inp)
+        self.linear_dst = nn.Linear(nout, FLAGS.ntl_inp)
+
+    def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
+        """
+        Parameters
+        ----------
+        seq : (n, l)
+        n : (n,)
+        tok : (n.sum(),)
+        n_idx : (n.sum(),)
+        idx : (n_idx.sum(),)
+        m : (n,)
+        src : (m.sum(),)
+        dst : (m.sum(),)
+        rel : (m.sum(),)
+        """
+        x_tok = pad_packed_sequence(PackedSequence(self.tok_encoder(seq.data), seq.batch_sizes,
+                                                   seq.sorted_indices, seq.unsorted_indices), batch_first=True)
+        k = pad_packed_sequence(idx2grp, batch_first=True) + torch.arange(len(x)).view(-1, 1).type_as(x)
+        x_grp = pack_sequence(scatter_sum(x_tok.view(-1, x_tok.size(-1)), k, 0).cpu().split(n_grp.cpu().tolist())).cuda()
+        h_grp = self.lstm_encoder(x_grp)
+        h_tok = pad_packed_sequence(h_grp, batch_first=True)[torch.arange(len(x_tok)).repeat_interleave(n_grp).type_as(x), k, :]
+
+        i = torch.arange(len(n)).type_as(tok).repeat_interleave(n).repeat_interleave(n_idx)
+        j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
+        h = scatter_sum(h_tok[i, idx, :], j, 0)
+
+        logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(mask)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int().type_as(tok), torch.arange(len(n)).type_as(tok).repeat_interleave(n * n))
+        d["emr"] = em.float().mean()
+        if self.training:
+            #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
+            nll_pos = -F.logsigmoid(logit[mask]).sum() / len(n)
+            nll_neg = -torch.sum(torch.log(1 + 1e-5 - logit[~mask].sigmoid())) / len(n)
+            d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
 
         return d, {"cfq_idx" : kwargs['cfq_idx'], "n" : n, "em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v], "logit" : logit}

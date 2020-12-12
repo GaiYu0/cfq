@@ -43,6 +43,8 @@ class CFQDataset(Dataset):
         self.data = dict(data.items())
         self.data["seq"] = rag("seq", "n_tok")
         self.data["isconcept"], self.data["isvariable"] = rag("isconcept", "n_tok"), rag("isvariable", "n_tok")
+        self.data["pos2grp"] = rag("seq", "n_tok")
+        self.data["grp2pos"] = 
         self.data["n_idx"], self.data["idx"] = rag("n_idx", "n"), rag(rag("idx", "n_idx"), "n")
         self.data["tok"] = rag("tok", "n")
         self.data["src"], self.data["dst"], self.data["rel"] = rag("src", "m"), rag("dst", "m"), rag("rel", "m")
