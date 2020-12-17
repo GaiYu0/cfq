@@ -42,19 +42,20 @@ class CFQDataset(Dataset):
         rag = lambda x, y: RaggedArray(get(x), np.cumsum(np.hstack([[0], get(y)])))
         self.data = dict(data.items())
         self.data["seq"] = rag("seq", "n_tok")
+        self.data["pos2grp"] = rag("pos2grp", "n_tok")
         self.data["isconcept"], self.data["isvariable"] = rag("isconcept", "n_tok"), rag("isvariable", "n_tok")
-        self.data["pos2grp"] = rag("seq", "n_tok")
-        self.data["grp2pos"] = 
         self.data["n_idx"], self.data["idx"] = rag("n_idx", "n"), rag(rag("idx", "n_idx"), "n")
         self.data["tok"] = rag("tok", "n")
         self.data["src"], self.data["dst"], self.data["rel"] = rag("src", "m"), rag("dst", "m"), rag("rel", "m")
 
+        '''
         disp = np.hstack([np.zeros(1, dtype=int), data["n"]]).cumsum()
         disp_ = disp[:-1].repeat(data["m"])
         tok_src = data["tok"][data["src"] + disp_]
         tok_dst = data["tok"][data["dst"] + disp_]
         tok_rel = data["rel"] + ntok
         self.data["q"] = RaggedArray(np.vstack([tok_src, tok_rel, tok_dst]).T, disp)
+        '''
 
     def __len__(self):
         return len(self.idx)
@@ -97,6 +98,7 @@ class CollateFunction:
         pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
         if FLAGS.seq_model == "lstm":
             b["seq"] = pack_sequence([torch.from_numpy(s["seq"]) for s in samples], enforce_sorted=False)
+            b["pos2grp"] = pack_sequence([torch.from_numpy(s["pos2grp"]) for s in samples], enforce_sorted=False)
         elif FLAGS.seq_model == "transformer":
             b["seq"] = {
                 "tok": pad("seq", self.tok2idx["[PAD]"]).t(),
@@ -108,7 +110,7 @@ class CollateFunction:
             raise Exception()
 
         cat = lambda k: torch.from_numpy(np.hstack([s[k] for s in samples]))
-        b["n"], b["n_idx"], b["idx"] = cat("n"), cat("n_idx"), cat("idx")
+        b["n"], b["n_idx"], b["idx"], b["n_grp"] = cat("n"), cat("n_idx"), cat("idx"), cat("n_grp")
         b["m"], src, dst, b["rel"] = cat("m"), cat("src"), cat("dst"), cat("rel")
 
         offset = torch.tensor([0] + [s["n"] for s in samples[:-1]]).cumsum(0)
@@ -125,6 +127,7 @@ class CollateFunction:
         b["tok"] = cat("tok")
         b["cfq_idx"] = cat("cfq_idx")
 
+        '''
         if FLAGS.seq_model == "lstm":
             max_len = b["m"].max() + 2
             hd = self.ntok + self.nrel
@@ -134,6 +137,8 @@ class CollateFunction:
                     [np.hstack([[hd], s["q"].reshape([-1]), 3 * (max_len - len(s["q"])) * [self.tok2idx["[PAD]"]], [tl]]) for s in samples]
                 )
             )
+        '''
+
         return b
 
 

@@ -4,7 +4,7 @@ from absl import flags
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
+from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
 FLAGS = flags.FLAGS
@@ -17,13 +17,13 @@ flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
 flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
 flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
 flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
-flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
-flags.DEFINE_integer("seq_nhead", 16, "Transformer number of heads")
+flags.DEFINE_integer("seq_nlayers", 1, "Sequence model depth")
+flags.DEFINE_integer("seq_nhead", 0, "Transformer number of heads")
 
 # neural tensor layer flags
 flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
 flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
-flags.DEFINE_boolean("ntl_bilinear", False, "Sequence model is bilinear?")
+flags.DEFINE_boolean("ntl_bilinear", True, "Sequence model is bilinear?")
 
 
 class LSTMModel(nn.Module):
@@ -193,8 +193,8 @@ class InvariantModel(nn.Module):
         self.idx2rel, self.rel2idx = rel_vocab
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
-        self.tok_encoder = nn.Embedding(ntok, ninp)
-        self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
+        self.tok_encoder = nn.Embedding(ntok, FLAGS.seq_inp)
+        self.lstm_encoder = nn.LSTM(FLAGS.seq_inp, FLAGS.seq_hidden_dim // 2, FLAGS.seq_nlayers, batch_first=True, bidirectional=True)
 
         self.bn_src = nn.BatchNorm1d(FLAGS.ntl_inp)
         self.bn_dst = nn.BatchNorm1d(FLAGS.ntl_inp)
@@ -204,7 +204,7 @@ class InvariantModel(nn.Module):
         self.linear_src = nn.Linear(nout, FLAGS.ntl_inp)
         self.linear_dst = nn.Linear(nout, FLAGS.ntl_inp)
 
-    def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, rel=None, g=None, **kwargs):
+    def forward(self, seq, n, tok, n_idx, idx, m, u, v, src, dst, mask, pos2grp, n_grp, rel=None, g=None, **kwargs):
         """
         Parameters
         ----------
@@ -217,17 +217,20 @@ class InvariantModel(nn.Module):
         src : (m.sum(),)
         dst : (m.sum(),)
         rel : (m.sum(),)
+        mask :
+        pos2grp : PackedSequence
         """
-        x_tok = pad_packed_sequence(PackedSequence(self.tok_encoder(seq.data), seq.batch_sizes,
-                                                   seq.sorted_indices, seq.unsorted_indices), batch_first=True)
-        k = pad_packed_sequence(idx2grp, batch_first=True) + torch.arange(len(x)).view(-1, 1).type_as(x)
-        x_grp = pack_sequence(scatter_sum(x_tok.view(-1, x_tok.size(-1)), k, 0).cpu().split(n_grp.cpu().tolist())).cuda()
-        h_grp = self.lstm_encoder(x_grp)
-        h_tok = pad_packed_sequence(h_grp, batch_first=True)[torch.arange(len(x_tok)).repeat_interleave(n_grp).type_as(x), k, :]
-
-        i = torch.arange(len(n)).type_as(tok).repeat_interleave(n).repeat_interleave(n_idx)
-        j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
-        h = scatter_sum(h_tok[i, idx, :], j, 0)
+        pack_as = lambda x, packed_seq: PackedSequence(x, packed_seq.batch_sizes,
+                                                       packed_seq.sorted_indices, packed_seq.unsorted_indices)
+        x_tok, _ = pad_packed_sequence(pack_as(self.tok_encoder(seq.data), seq), batch_first=True)
+        disp = torch.cat([torch.zeros(1).type_as(n), n_grp.cumsum(0)[:-1]])
+        pos2grp_, _ = pad_packed_sequence(pos2grp, batch_first=True)
+        x_grp = scatter_sum(x_tok.view(-1, x_tok.size(-1)), torch.flatten(pos2grp_ + disp.view(-1, 1)), 0)
+        x = pack_sequence(x_grp.split(n_grp.cpu().tolist(), 0), enforce_sorted=False).to(n.device)  # TODO(GaiYu0): type_as?
+        h_grp, _ = pad_packed_sequence(self.lstm_encoder(x)[0], batch_first=True)
+        i = torch.arange(len(n)).type_as(n).repeat_interleave(n).repeat_interleave(n_idx)
+        j = torch.arange(n.sum()).type_as(n).repeat_interleave(n_idx)
+        h = scatter_sum(h_grp[i, pos2grp_[i, idx], :], j, 0)
 
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 

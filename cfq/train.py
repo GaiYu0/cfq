@@ -12,7 +12,7 @@ from sklearn.metrics import precision_recall_fscore_support
 import torch
 import transformers
 
-from cfq.model import Model
+from cfq.model import InvariantModel as Model
 from cfq import DATA_DIR, RUN_DIR_ROOT
 from cfq.data import CFQDataModule
 
@@ -48,7 +48,7 @@ flags.DEFINE_integer("num_epochs", 100, "Number of training epochs.", lower_boun
 flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lower_bound=0)
 #  0 = constant, 0.5 = cosine decay, 1.5 = two cycle cosine LR schedule
 
-flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "vocab.pickle"), "Token vocab path")
+flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "tok-vocab.pickle"), "Token vocab path")
 flags.DEFINE_string("rel_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
 flags.DEFINE_string("cfq_data_path", str(DATA_DIR / "cfq" / "data.npz"), "Main CFQ data path")
 flags.DEFINE_string("cfq_split_data_dir", str(DATA_DIR / "cfq" / "splits"), "CFQ split data path directory.")
