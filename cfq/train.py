@@ -12,7 +12,7 @@ from sklearn.metrics import precision_recall_fscore_support
 import torch
 import transformers
 
-from cfq.model import InvariantModel as Model
+from cfq.model import AttentionModel as Model
 from cfq import DATA_DIR, RUN_DIR_ROOT
 from cfq.data import CFQDataModule
 
@@ -32,7 +32,7 @@ flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_
 flags.DEFINE_string("run_name", None, "Unique run ID")
 flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
-flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
+flags.DEFINE_string("gpus", None, "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_integer("num_workers", 8, "Total number of workers.", lower_bound=1)
 flags.DEFINE_integer("seed", 2, "Random seed.", lower_bound=0)
 flags.DEFINE_enum("precision", "32", ["32", "16"], "FP precision to use.")
@@ -49,6 +49,7 @@ flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lo
 #  0 = constant, 0.5 = cosine decay, 1.5 = two cycle cosine LR schedule
 
 flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "tok-vocab.pickle"), "Token vocab path")
+flags.DEFINE_string("tag_vocab_path", str(DATA_DIR / "cfq" / "tag-vocab.pickle"), "Tag vocab path")
 flags.DEFINE_string("rel_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
 flags.DEFINE_string("cfq_data_path", str(DATA_DIR / "cfq" / "data.npz"), "Main CFQ data path")
 flags.DEFINE_string("cfq_split_data_dir", str(DATA_DIR / "cfq" / "splits"), "CFQ split data path directory.")
@@ -73,10 +74,10 @@ flags.DEFINE_bool("dump_test_pred", False, "Whether to dump test predictions.")
 
 
 class CFQTrainer(pl.LightningModule):
-    def __init__(self, tok_vocab, rel_vocab, last_epoch=-1):
+    def __init__(self, tok_vocab, tag_vocab, rel_vocab, last_epoch=-1):
         super().__init__()
         self.last_epoch = last_epoch
-        self.model = Model(tok_vocab, rel_vocab)
+        self.model = Model(tok_vocab, tag_vocab, rel_vocab)
         self.test_dict = {}
 
     def forward(self, x):
@@ -138,15 +139,16 @@ def main(argv):
 
     # load vocab
     tok_vocab = pickle.load(open(FLAGS.tok_vocab_path, "rb"))
+    tag_vocab = pickle.load(open(FLAGS.tag_vocab_path, "rb"))
     rel_vocab = pickle.load(open(FLAGS.rel_vocab_path, "rb"))
 
     # load data
-    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, rel_vocab)
+    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, tag_vocab, rel_vocab)
     if FLAGS.resume_from_checkpoint is None:
-        model = CFQTrainer(tok_vocab, rel_vocab)
+        model = CFQTrainer(tok_vocab, tag_vocab, rel_vocab)
     else:
         ckpt = torch.load(FLAGS.resume_from_checkpoint)
-        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, rel_vocab=rel_vocab, last_epoch=ckpt['epoch'])
+        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, rel_vocab=rel_vocab, last_epoch=ckpt['epoch'])
 
     # configure loggers and checkpointing
     

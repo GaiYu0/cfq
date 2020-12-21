@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
+import utils
+
 FLAGS = flags.FLAGS
 # global flags
 flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
@@ -117,10 +119,10 @@ class NeuralTensorLayer(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, tok_vocab, rel_vocab):
+    def __init__(self, tok_vocab, typ_vocab):
         super().__init__()
         self.idx2tok, self.tok2idx = tok_vocab
-        self.idx2rel, self.rel2idx = rel_vocab
+        self.idx2rel, self.rel2idx = typ_vocab
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         if FLAGS.seq_model == "embedding":
@@ -187,10 +189,10 @@ class Model(nn.Module):
 
 
 class InvariantModel(nn.Module):
-    def __init__(self, tok_vocab, rel_vocab):
+    def __init__(self, tok_vocab, typ_vocab):
         super().__init__()
         self.idx2tok, self.tok2idx = tok_vocab
-        self.idx2rel, self.rel2idx = rel_vocab
+        self.idx2rel, self.rel2idx = typ_vocab
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         self.tok_encoder = nn.Embedding(ntok, FLAGS.seq_inp)
@@ -220,8 +222,6 @@ class InvariantModel(nn.Module):
         mask :
         pos2grp : PackedSequence
         """
-        pack_as = lambda x, packed_seq: PackedSequence(x, packed_seq.batch_sizes,
-                                                       packed_seq.sorted_indices, packed_seq.unsorted_indices)
         x_tok, _ = pad_packed_sequence(pack_as(self.tok_encoder(seq.data), seq), batch_first=True)
         disp = torch.cat([torch.zeros(1).type_as(n), n_grp.cumsum(0)[:-1]])
         pos2grp_, _ = pad_packed_sequence(pos2grp, batch_first=True)
@@ -247,3 +247,74 @@ class InvariantModel(nn.Module):
             d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
 
         return d, {"cfq_idx" : kwargs['cfq_idx'], "n" : n, "em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v], "logit" : logit}
+
+
+class AttentionModel(nn.Module):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2tag, self.tag2idx = tag_vocab
+        self.idx2typ, self.typ2idx = typ_vocab
+        n_tok, n_tag, n_typ = len(self.idx2tok), len(self.idx2tag), len(self.idx2typ)
+
+        dx, dh = FLAGS.seq_inp, FLAGS.seq_hidden_dim
+        self.tok_encoder = nn.Embedding(n_tok, dx)
+        self.tag_encoder = nn.Embedding(n_tag, dx)
+        self.lstm_encoder = nn.LSTM(dx, dh // 2, FLAGS.seq_nlayers,
+                                    batch_first=True, bidirectional=True)
+        self.q = nn.Linear(2 * dh, dh)
+        self.k = nn.Linear(dh, dh)
+        self.rel = nn.Linear(3 * dh, n_typ)
+
+    def attention(self, q, k, v, m):
+        """
+        Parameters
+        ----------
+        nq : (n,)
+        q : (nq.sum(), d)
+        k : (n, l, d)
+        v : (n, l, d)
+        m : (n, l, d)
+
+        Returns
+        -------
+        (nq.sum(), d)
+        """
+        _, l, d = k.shape
+        q = self.q(q).view(-1, 1, d, 1)
+        reshape = lambda x: x.repeat_interleave(nq, 0).view(-1, l, 1, d)
+        k, v, m = map(reshape, [self.k(k), v, m])
+        s = k.matmul(q).mul(1 + m.log())
+        return v.mul(s.softmax(1)[:, :, None]).sum(1)
+
+    def forward(self, seq, mask, grp, idx, src, dst, typ, **kwargs):
+        """
+        Parameters
+        ----------
+        seq : PackedSequence
+        mask :
+        grp : (n,)
+        mem : (n,)
+        idx : (m,)
+        src : (m,)
+        dst : (m,)
+        typ : (m, n_typ)
+        """
+        x_grp = utils.pack_as(self.tag_encoder(seq.data), seq.batch_sizes,
+                              seq.sorted_indices, seq.unsorted_indices)
+        h_grp, _ = pad_packed_sequence(self.lstm_encoder(x_grp)[0], batch_first=True)
+        q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
+        z_grp = scatter_sum(self.tok_encoder(mem), grp, 0)
+        logit = self.rel(torch.cat([q, self.attention(q, h_grp, z_grp, mask)], -1))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(typ)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), idx)
+        d["emr"] = em.float().mean()
+        if self.training:
+            # logsigmoid(1 - x) = -x + logsigmoid(x)
+            d["loss"] = d["nll"] = logit.mul(1 - typ).sub(F.logsigmoid(logit)).sum() / len(h_grp)
+
+        return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
