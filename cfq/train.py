@@ -32,7 +32,7 @@ flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_
 flags.DEFINE_string("run_name", None, "Unique run ID")
 flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
-flags.DEFINE_string("gpus", None, "GPU assignment (from pytorch-lightning).")
+flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_integer("num_workers", 8, "Total number of workers.", lower_bound=1)
 flags.DEFINE_integer("seed", 2, "Random seed.", lower_bound=0)
 flags.DEFINE_enum("precision", "32", ["32", "16"], "FP precision to use.")
@@ -50,7 +50,7 @@ flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lo
 
 flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "tok-vocab.pickle"), "Token vocab path")
 flags.DEFINE_string("tag_vocab_path", str(DATA_DIR / "cfq" / "tag-vocab.pickle"), "Tag vocab path")
-flags.DEFINE_string("rel_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
+flags.DEFINE_string("typ_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
 flags.DEFINE_string("cfq_data_path", str(DATA_DIR / "cfq" / "data.npz"), "Main CFQ data path")
 flags.DEFINE_string("cfq_split_data_dir", str(DATA_DIR / "cfq" / "splits"), "CFQ split data path directory.")
 
@@ -74,11 +74,11 @@ flags.DEFINE_bool("dump_test_pred", False, "Whether to dump test predictions.")
 
 
 class CFQTrainer(pl.LightningModule):
-    def __init__(self, tok_vocab, tag_vocab, rel_vocab, last_epoch=-1):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab, last_epoch=-1):
         super().__init__()
         self.last_epoch = last_epoch
-        self.model = Model(tok_vocab, tag_vocab, rel_vocab)
-        self.test_dict = {}
+        self.model = Model(tok_vocab, tag_vocab, typ_vocab)
+        self.out = {}
 
     def forward(self, x):
         raise NotImplementedError()
@@ -101,7 +101,7 @@ class CFQTrainer(pl.LightningModule):
         with torch.no_grad():
             out_d, out_dict = self.model(**self.place_batch(batch))
         out_d["precision"], out_d["recall"], out_d["f1"] = self.compute_f1(
-            out_dict["rel_true"].cpu().numpy(), out_dict["rel_pred"].cpu().numpy()
+            out_dict["typ_true"].cpu().numpy(), out_dict["typ_pred"].cpu().numpy()
         )
         self.log_dict({"{}/{}".format(key, k): v for k, v in out_d.items()}, on_epoch=True, prog_bar=True)
         return out_d["emr"]
@@ -112,10 +112,10 @@ class CFQTrainer(pl.LightningModule):
         self.log_dict({"test/{}".format(k): v for k, v in out_d.items()}, on_epoch=True)
 
         if FLAGS.dump_test_pred:
-            if self.test_dict:
-                self.test_dict = {k : torch.cat([self.test_dict[k], v.cpu()], 0) for k, v in out_dict.items()}
+            if self.out:
+                self.out = {k : torch.cat([self.out[k], v.cpu()], 0) for k, v in out_dict.items()}
             else:
-                self.test_dict = {k : v.cpu() for k, v in out_dict.items()}
+                self.out = {k : v.cpu() for k, v in out_dict.items()}
 
         return out_d["acc"]
 
@@ -140,15 +140,15 @@ def main(argv):
     # load vocab
     tok_vocab = pickle.load(open(FLAGS.tok_vocab_path, "rb"))
     tag_vocab = pickle.load(open(FLAGS.tag_vocab_path, "rb"))
-    rel_vocab = pickle.load(open(FLAGS.rel_vocab_path, "rb"))
+    typ_vocab = pickle.load(open(FLAGS.typ_vocab_path, "rb"))
 
     # load data
-    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, tag_vocab, rel_vocab)
+    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, tag_vocab, typ_vocab)
     if FLAGS.resume_from_checkpoint is None:
-        model = CFQTrainer(tok_vocab, tag_vocab, rel_vocab)
+        model = CFQTrainer(tok_vocab, tag_vocab, typ_vocab)
     else:
         ckpt = torch.load(FLAGS.resume_from_checkpoint)
-        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, rel_vocab=rel_vocab, last_epoch=ckpt['epoch'])
+        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, typ_vocab=typ_vocab, last_epoch=ckpt['epoch'])
 
     # configure loggers and checkpointing
     
@@ -197,7 +197,7 @@ def main(argv):
     logger.info(f"Result of evaluation: {result}")
 
     if FLAGS.dump_test_pred:
-        np.savez(log_dir / "test_dict.npz", **{k : v.numpy() for k, v in model.test_dict.items()})
+        np.savez(log_dir / "test_dict.npz", **{k : v.numpy() for k, v in model.out.items()})
 
 if __name__ == "__main__":
     app.run(main)

@@ -4,7 +4,7 @@ from absl import flags
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence, PackedSequence
+from torch.nn.utils.rnn import pack_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
 import utils
@@ -18,8 +18,8 @@ flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
 # sequence model flags
 flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
 flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
-flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
-flags.DEFINE_integer("seq_nlayers", 1, "Sequence model depth")
+flags.DEFINE_integer("seq_hidden_dim", 256, "Sequence hidden dimension")
+flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
 flags.DEFINE_integer("seq_nhead", 0, "Transformer number of heads")
 
 # neural tensor layer flags
@@ -264,9 +264,10 @@ class AttentionModel(nn.Module):
                                     batch_first=True, bidirectional=True)
         self.q = nn.Linear(2 * dh, dh)
         self.k = nn.Linear(dh, dh)
-        self.rel = nn.Linear(3 * dh, n_typ)
+        self.rel = nn.Linear(2 * dh + dx, n_typ)
+        self.bn = nn.BatchNorm1d(dh)
 
-    def attention(self, q, k, v, m):
+    def attention(self, nq, q, k, v, m):
         """
         Parameters
         ----------
@@ -280,32 +281,37 @@ class AttentionModel(nn.Module):
         -------
         (nq.sum(), d)
         """
-        _, l, d = k.shape
+        n, l, d = k.shape
         q = self.q(q).view(-1, 1, d, 1)
-        reshape = lambda x: x.repeat_interleave(nq, 0).view(-1, l, 1, d)
+        reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
         k, v, m = map(reshape, [self.k(k), v, m])
-        s = k.matmul(q).mul(1 + m.log())
-        return v.mul(s.softmax(1)[:, :, None]).sum(1)
+        s = k.matmul(q).div(d**0.5).sub(torch.exp(50 * (1 - m.float())) - 1)
+        return v.mul(s.softmax(1)).sum(1).squeeze()
 
-    def forward(self, seq, mask, grp, idx, src, dst, typ, **kwargs):
+    def forward(self, seq, mem, grp, pos2grp, msk, src, dst, typ, idx, m, **kwargs):
         """
         Parameters
         ----------
         seq : PackedSequence
-        mask :
-        grp : (n,)
+        msk :
         mem : (n,)
+        grp : (n,)
         idx : (m,)
-        src : (m,)
-        dst : (m,)
+        u : (m,)
+        v : (m,)
         typ : (m, n_typ)
         """
-        x_grp = utils.pack_as(self.tag_encoder(seq.data), seq.batch_sizes,
-                              seq.sorted_indices, seq.unsorted_indices)
+        z_grp = scatter_sum(self.tok_encoder(mem), grp, 0)[pos2grp]
+        '''
+        _, lens = pad_packed_sequence(seq)
+        x_grp = pack_padded_sequence(z_grp, lens, batch_first=True, enforce_sorted=False)
+        '''
+
+        x_grp = utils.pack_as(self.tag_encoder(seq.data), seq)
         h_grp, _ = pad_packed_sequence(self.lstm_encoder(x_grp)[0], batch_first=True)
+        h_grp = h_grp.view(-1, h_grp.size(-1)).view(*h_grp.shape)
         q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
-        z_grp = scatter_sum(self.tok_encoder(mem), grp, 0)
-        logit = self.rel(torch.cat([q, self.attention(q, h_grp, z_grp, mask)], -1))
+        logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, z_grp, msk)], -1))
 
         d = {}
         gt = logit.gt(0)
@@ -314,7 +320,6 @@ class AttentionModel(nn.Module):
         em, _ = scatter_min(eq.all(1).int(), idx)
         d["emr"] = em.float().mean()
         if self.training:
-            # logsigmoid(1 - x) = -x + logsigmoid(x)
-            d["loss"] = d["nll"] = logit.mul(1 - typ).sub(F.logsigmoid(logit)).sum() / len(h_grp)
+            d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(h_grp)
 
         return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
