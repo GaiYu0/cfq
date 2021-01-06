@@ -117,7 +117,8 @@ class CFQDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         logger.info(f"Initializing dataset at stage {stage}")
         data = np.load(FLAGS.cfq_data_path)
-        print(np.unique(data["n_var"], return_counts=True))
+        u, c = np.unique(data["n_var"], return_counts=True)
+        logger.info(f"{u} {c}")
         split_data_dir_path = Path(FLAGS.cfq_split_data_dir) / f"{FLAGS.cfq_split}.npz"
         logger.info(f"Loading data from {split_data_dir_path}")
         split_data = np.load(split_data_dir_path)

@@ -265,7 +265,6 @@ class AttentionModel(nn.Module):
         self.q = nn.Linear(2 * dh, dh)
         self.k = nn.Linear(dh, dh)
         self.rel = nn.Linear(2 * dh + dx, n_typ)
-        self.bn = nn.BatchNorm1d(dh)
 
     def attention(self, nq, q, k, v, m):
         """
@@ -312,6 +311,162 @@ class AttentionModel(nn.Module):
         h_grp = h_grp.view(-1, h_grp.size(-1)).view(*h_grp.shape)
         q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
         logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, z_grp, msk)], -1))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(typ)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), idx)
+        d["emr"] = em.float().mean()
+        if self.training:
+            d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(h_grp)
+
+        return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
+
+
+class LSTMEncoder(nn.Module):
+    def __init__(self, n_tok, d_x, d_h, n_lay):
+        super().__init__()
+        self.embedding = None if n_tok is None else nn.Embedding(n_tok, d_x)
+        self.lstm = nn.LSTM(d_x, d_h // 2, n_lay, batch_first=True, bidirectional=True)
+
+    def forward(self, seq, z=None):
+        seq = seq if self.embedding is None else utils.pack_as(self.embedding(seq.data), seq)
+        h, (z, _) = self.lstm(seq, *([] if z is None else [[z, torch.zeros_like(z)]]))
+        h, _ = pad_packed_sequence(h, batch_first=True)
+        return h, z
+
+
+class NounPhraseModel(nn.Module):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2tag, self.tag2idx = tag_vocab
+        self.idx2typ, self.typ2idx = typ_vocab
+        n_tok, n_tag, n_typ = len(self.idx2tok), len(self.idx2tag), len(self.idx2typ)
+
+        d_x, d_h, n_lay = _, self.d_h, self.n_lay = FLAGS.seq_inp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers
+        self.tok_embedding = nn.Embedding(n_tok, d_x)
+        self.tag_encoder = LSTMEncoder(n_tag + 1, d_x, d_h, n_lay)
+        self.noun_encoder = LSTMEncoder(n_tag, d_x, d_h, n_lay)
+        self.np_encoder = LSTMEncoder(None, d_x, d_h, n_lay)
+        self.encoder = LSTMEncoder(None, d_x, d_h, n_lay)
+        self.tag2noun = nn.Linear(d_h, n_lay * d_h)
+        self.noun2np = nn.Linear(n_lay * d_h, d_x)
+
+        self.q = nn.Linear(2 * d_h, d_h)
+        self.k = nn.Linear(d_h, d_h)
+        self.rel = nn.Linear(2 * d_h + d_x, n_typ)
+
+    def attention(self, nq, q, k, v, m):
+        """
+        Parameters
+        ----------
+        nq : (n,)
+        q : (nq.sum(), d)
+        k : (n, l, d)
+        v : (n, l, d)
+        m : (n, l, d)
+
+        Returns
+        -------
+        (nq.sum(), d)
+        """
+        n, l, d = k.shape
+        q = self.q(q).view(-1, 1, d, 1)
+        reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
+        k, v, m = map(reshape, [self.k(k), v, m])
+        s = k.matmul(q).div(d**0.5).sub(torch.exp(50 * (1 - m.float())) - 1)
+        return v.mul(s.softmax(1)).sum(1).squeeze()
+
+    def forward(self, seq_tag, seq_noun,
+                idx_np, pos_np,
+                isnoun, idx_noun, pos_noun, idx_tag, pos_tag,
+                mem, grp, pos2grp,
+                m, idx, src, dst, typ, msk, **kwargs):
+        h_tag, _ = self.tag_encoder(seq_tag)
+        z_tag = F.relu(self.tag2noun(h_tag[idx_np, pos_np]))
+        z_tag = z_tag.view(-1, 2 * self.n_lay, self.d_h // 2).permute(1, 0, 2)
+        h_noun, _ = self.noun_encoder(seq_noun, z_tag)
+        h_grp = h_noun[idx_noun.data, pos_noun.data].where(isnoun.data[:, None], h_tag[idx_tag.data, pos_tag.data])
+        h_grp, _ = pad_packed_sequence(utils.pack_as(h_grp, isnoun), batch_first=True)
+        q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
+        x_grp = scatter_sum(self.tok_embedding(mem), grp, 0)[pos2grp]
+        logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, x_grp, msk)], -1))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(typ)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), idx)
+        d["emr"] = em.float().mean()
+        if self.training:
+            d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(h_grp)
+
+        return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
+
+
+class NounPhraseModelV2(nn.Module):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2tag, self.tag2idx = tag_vocab
+        self.idx2typ, self.typ2idx = typ_vocab
+        n_tok, n_tag, n_typ = len(self.idx2tok), len(self.idx2tag), len(self.idx2typ)
+
+        d_x, d_h, n_lay = _, self.d_h, self.n_lay = FLAGS.seq_inp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers
+        self.tok_embedding = nn.Embedding(n_tok, d_x)
+        self.sep_embedding = nn.Embedding(1, d_h)
+        self.tag_encoder = LSTMEncoder(n_tag + 2, d_x, d_h, n_lay)
+        self.noun_encoder = LSTMEncoder(n_tag, d_x, d_h, n_lay)
+        self.np_encoder = LSTMEncoder(None, d_h, d_h, n_lay)
+        self.encoder = LSTMEncoder(None, d_x, d_h, n_lay)
+        self.tag2noun = nn.Linear(d_h, n_lay * d_h)
+        self.noun2np = nn.Linear(n_lay * d_h, d_x)
+
+        self.q = nn.Linear(2 * d_h, d_h)
+        self.k = nn.Linear(d_h, d_h)
+        self.rel = nn.Linear(2 * d_h + d_x, n_typ)
+
+    def attention(self, nq, q, k, v, m):
+        """
+        Parameters
+        ----------
+        nq : (n,)
+        q : (nq.sum(), d)
+        k : (n, l, d)
+        v : (n, l, d)
+        m : (n, l, d)
+
+        Returns
+        -------
+        (nq.sum(), d)
+        """
+        n, l, d = k.shape
+        q = self.q(q).view(-1, 1, d, 1)
+        reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
+        k, v, m = map(reshape, [self.k(k), v, m])
+        s = k.matmul(q).div(d**0.5).sub(torch.exp(50 * (1 - m.float())) - 1)
+        return v.mul(s.softmax(1)).sum(1).squeeze()
+
+    def forward(self, seq_tag, seq_noun,
+                idx_np, pos_np,
+                issep, idx_noun, pos_noun,
+                idx_nps, pos_nps, isnp, idx_tag, pos_tag,
+                mem, grp, pos2grp,
+                m, idx, src, dst, typ, msk, **kwargs):
+        h_tag, _ = self.tag_encoder(seq_tag)
+        z_tag = F.relu(self.tag2noun(h_tag[idx_np, pos_np]))
+        z_tag = z_tag.view(-1, 2 * self.n_lay, self.d_h // 2).permute(1, 0, 2)
+        h_noun, _ = self.noun_encoder(seq_noun, z_tag)
+        x_sep = self.sep_embedding(torch.zeros_like(issep.data, dtype=torch.long))
+        x_np = x_sep.where(issep.data[:, None], h_noun[idx_noun.data, pos_noun.data])
+        h_np, _ = self.np_encoder(utils.pack_as(x_np, issep))
+        h_grp = h_np[idx_nps.data, pos_nps.data].where(isnp.data[:, None], h_tag[idx_tag.data, pos_tag.data])
+        h_grp, _ = pad_packed_sequence(utils.pack_as(h_grp, isnp), batch_first=True)
+        q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
+        x_grp = scatter_sum(self.tok_embedding(mem), grp, 0)[pos2grp]
+        logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, x_grp, msk)], -1))
 
         d = {}
         gt = logit.gt(0)

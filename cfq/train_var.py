@@ -32,8 +32,8 @@ flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_
 flags.DEFINE_string("run_name", None, "Unique run ID")
 flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
-flags.DEFINE_string("gpus", None, "GPU assignment (from pytorch-lightning).")
-# flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
+# flags.DEFINE_string("gpus", None, "GPU assignment (from pytorch-lightning).")
+flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_integer("num_workers", 8, "Total number of workers.", lower_bound=1)
 flags.DEFINE_integer("seed", 2, "Random seed.", lower_bound=0)
 flags.DEFINE_enum("precision", "32", ["32", "16"], "FP precision to use.")
@@ -78,7 +78,7 @@ class CFQTrainer(pl.LightningModule):
     def __init__(self, tok_vocab, tag_vocab, typ_vocab, last_epoch=-1):
         super().__init__()
         self.last_epoch = last_epoch
-        self.model = Model(3, tok_vocab, tag_vocab, typ_vocab)
+        self.model = Model(7, tok_vocab, tag_vocab, typ_vocab)
         self.out = {}
 
     def forward(self, x):

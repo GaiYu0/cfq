@@ -12,7 +12,8 @@ from sklearn.metrics import precision_recall_fscore_support
 import torch
 import transformers
 
-from cfq.model import AttentionModel as Model
+# from cfq.model import AttentionModel as Model
+from cfq.model import NounPhraseModelV2 as Model
 from cfq import DATA_DIR, RUN_DIR_ROOT
 from cfq.data import CFQDataModule
 
@@ -32,6 +33,7 @@ flags.DEFINE_string("run_dir_name", None, "Name of the run dir (defaults to run_
 flags.DEFINE_string("run_name", None, "Unique run ID")
 flags.DEFINE_string("wandb_project", "cfq_pl_nopretrain", "wandb project for logging (cfq split automatically appended).")
 
+# flags.DEFINE_string("gpus", None, "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_string("gpus", "-1", "GPU assignment (from pytorch-lightning).")
 flags.DEFINE_integer("num_workers", 8, "Total number of workers.", lower_bound=1)
 flags.DEFINE_integer("seed", 2, "Random seed.", lower_bound=0)

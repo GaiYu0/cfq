@@ -1,10 +1,12 @@
+from itertools import *
+
 from absl import flags
 import numpy as np
 from loguru import logger
 from pathlib import Path
 import pytorch_lightning as pl
 import torch
-from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import *
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 
@@ -14,9 +16,10 @@ FLAGS = flags.FLAGS
 
 
 class RaggedArray:
-    def __init__(self, data, indptr):
+    def __init__(self, data, indptr, seperate=False):
         self.data = data
         self.indptr = indptr
+        self.seperate = seperate
 
     def __getitem__(self, key):
         if isinstance(key, (int, np.integer)):
@@ -24,12 +27,70 @@ class RaggedArray:
         elif type(key) is slice:
             start, stop, stride = key.indices(len(self.indptr))
             assert stride == 1
-            return self.data[self.indptr[start] : self.indptr[stop]]
+            if self.seperate:
+                indptr = self.indptr[start : stop + 1]
+                return [self.data[start : stop] for start, stop in zip(indptr[:-1], indptr[1:])]
+            else:
+                return self.data[self.indptr[start] : self.indptr[stop]]
         else:
             raise RuntimeError()
 
     def __len__(self):
         return len(self.indptr) - 1
+
+
+'''
+class CFQDataset(Dataset):
+    def __init__(self, idx, dat, tok_vocab, tag_vocab, typ_vocab):
+        super().__init__()
+        idx2typ, _ = typ_vocab
+        self.n_typ = len(idx2typ)
+
+        self.idx = idx
+        get = lambda k: dat[k] if type(k) is str else k
+        rag = lambda x, y, **kwargs: RaggedArray(get(x), np.cumsum(np.hstack([[0], get(y)])), **kwargs)
+        self.dat = dict(dat.items())
+        self.dat["seq"] = rag("seq", "n_grp")
+        self.dat["n_mem"] = rag("n_mem", "n_grp")
+        self.dat["mem"] = rag(rag("mem", "n_mem"), "n_grp")
+        self.dat["src"], self.dat["dst"], self.dat["typ"] = rag("src", "n_rel"), rag("dst", "n_rel"), rag("typ", "n_rel")
+
+        self.dat["filter"] = rag("filter", "n_filter")
+        self.dat["idx2grp"] = rag("idx2grp", "n")
+
+        self.dat["seq_tag"] = rag("seq_tag", "len_tag")
+        self.dat["seq_noun"] = rag(rag("seq_noun", "len_noun", seperate=True), "len_np")
+        self.dat["pos_np"] = rag("pos_np", "len_np")
+
+        self.dat["len_noun"] = rag("len_noun", "len_np")
+        self.dat["isnoun"] = rag("isnoun", "n_grp")
+        self.dat["pos_noun"] = rag("pos_noun", "n_grp")
+        self.dat["pos_tag"] = rag("pos_tag", "n_grp")
+
+    def __len__(self):
+        return len(self.idx)
+
+    def __getitem__(self, key):
+        idx = self.idx[key]
+        for k, v in self.dat.items():
+            try:
+                v[idx]
+            except:
+                assert False, k
+        dat = {k: v[idx] for k, v in self.dat.items()}
+
+        dat["index"] = idx
+
+        n = self.dat["n"][idx]
+        typ = np.zeros([n, n, self.n_typ], dtype=bool)
+        typ[dat["src"], dat["dst"], dat["typ"]] = True
+        dat["typ"] = typ.reshape([-1, self.n_typ])
+
+        src, dst = np.meshgrid(dat["idx2grp"], dat["idx2grp"])
+        dat["src"], dat["dst"] = src.flatten(), dst.flatten()
+
+        return dat
+'''
 
 
 class CFQDataset(Dataset):
@@ -40,15 +101,28 @@ class CFQDataset(Dataset):
 
         self.idx = idx
         get = lambda k: dat[k] if type(k) is str else k
-        rag = lambda x, y: RaggedArray(get(x), np.cumsum(np.hstack([[0], get(y)])))
+        rag = lambda x, y, **kwargs: RaggedArray(get(x), np.cumsum(np.hstack([[0], get(y)])), **kwargs)
         self.dat = dict(dat.items())
         self.dat["seq"] = rag("seq", "n_grp")
         self.dat["n_mem"] = rag("n_mem", "n_grp")
         self.dat["mem"] = rag(rag("mem", "n_mem"), "n_grp")
         self.dat["src"], self.dat["dst"], self.dat["typ"] = rag("src", "n_rel"), rag("dst", "n_rel"), rag("typ", "n_rel")
-        
+
         self.dat["filter"] = rag("filter", "n_filter")
         self.dat["idx2grp"] = rag("idx2grp", "n")
+
+        self.dat["seq_tag"] = rag("seq_tag", "len_tag")
+        self.dat["seq_noun"] = rag(rag("seq_noun", "len_noun", seperate=True), "len_np")
+
+        self.dat["pos_noun"] = rag("pos_noun", "len_nps")
+        self.dat["pos_tag"] = rag("pos_tag", "n_grp")
+        self.dat["pos_np"] = rag("pos_np", "len_np")
+        self.dat["pos_nps"] = rag("pos_nps", "n_grp")
+
+        self.dat["len_noun"] = rag("len_noun", "len_np")
+
+        self.dat["isnp"] = rag("isnp", "n_grp")
+        self.dat["issep"] = rag("issep", "len_nps")
 
     def __len__(self):
         return len(self.idx)
@@ -75,14 +149,19 @@ class CFQDataset(Dataset):
         return dat
 
 
+"""
 class CollateFunction:
     def collate_fn(self, ds):
+        dats = ds
+
         hstack = lambda k: torch.from_numpy(np.hstack([d[k] for d in ds]))
         vstack = lambda k: torch.from_numpy(np.vstack([d[k] for d in ds]))
+        collate = lambda key: torch.tensor([dat[key] for dat in dats])
+        pack = lambda key: pack_sequence([torch.from_numpy(dat[key]) for dat in dats], enforce_sorted=False)
 
         bat = {"index" : torch.tensor([d["index"] for d in ds])}
 
-        seq = bat["seq"] = pack_sequence([torch.from_numpy(d["seq"]) for d in ds], enforce_sorted=False)
+        seq = bat["seq"] = pack("seq")
         msk, _ = bat["msk"], _ = pad_packed_sequence(utils.pack_as(torch.ones_like(seq.data), seq), batch_first=True)
 
         bat["mem"] = hstack("mem")
@@ -100,6 +179,73 @@ class CollateFunction:
         bat["typ"] = vstack("typ")
         bat["idx"] = torch.arange(len(m)).repeat_interleave(m)
         bat["m"] = m
+
+        bat["seq_tag"] = pack("seq_tag")
+        bat["seq_noun"] = pack_sequence(list(chain(*((torch.from_numpy(seq) for seq in dat["seq_noun"]) for dat in dats))), enforce_sorted=False)
+        len_np = collate("len_np")
+        bat["seq_np"] = pack_sequence(torch.arange(len_np.sum()).split(len_np.tolist()), enforce_sorted=False)
+        bat["idx_np"] = torch.arange(len(dats)).repeat_interleave(len_np)
+        bat["pos_np"] = torch.cat([torch.tensor(dat["pos_np"]) for dat in dats])
+
+        bat["isnoun"], bat["pos_noun"], bat["pos_tag"] = pack("isnoun"), pack("pos_noun"), pack("pos_tag")
+        isnoun, len_isnoun = pad_packed_sequence(bat["isnoun"], batch_first=True)
+        bat["idx_tag"] = pack_sequence([torch.zeros(len(dat["pos_tag"])).long() for dat in dats], enforce_sorted=False)
+        idx_noun, lengths = pad_packed_sequence(bat["idx_tag"], batch_first=True)
+        len_noun = hstack("len_noun")
+        idx_noun[isnoun] = torch.arange(len(len_noun)).repeat_interleave(len_noun)
+        bat["idx_noun"] = pack_padded_sequence(idx_noun, lengths, batch_first=True, enforce_sorted=False)
+
+        return bat
+"""
+
+
+class CollateFunction:
+    def collate_fn(self, ds):
+        dats = ds
+
+        hstack = lambda k: torch.from_numpy(np.hstack([d[k] for d in ds]))
+        vstack = lambda k: torch.from_numpy(np.vstack([d[k] for d in ds]))
+        collate = lambda key: torch.tensor([dat[key] for dat in dats])
+        pack = lambda key: pack_sequence([torch.from_numpy(dat[key]) for dat in dats], enforce_sorted=False)
+
+        bat = {"index" : torch.tensor([d["index"] for d in ds])}
+
+        seq = bat["seq"] = pack("seq")
+        msk, _ = bat["msk"], _ = pad_packed_sequence(utils.pack_as(torch.ones_like(seq.data), seq), batch_first=True)
+
+        bat["mem"] = hstack("mem")
+        n_mem = hstack("n_mem")
+        bat["grp"] = torch.arange(len(n_mem)).repeat_interleave(n_mem)
+        bat["pos2grp"] = msk.flatten().cumsum(0).sub(1).view(*msk.shape)
+
+        n = hstack("n")
+        m = n * n
+        bat["src"], bat["dst"] = hstack("src"), hstack("dst")
+        bat["typ"] = vstack("typ")
+        bat["idx"] = torch.arange(len(m)).repeat_interleave(m)
+        bat["m"] = m
+
+        bat["seq_tag"] = pack("seq_tag")
+        bat["seq_noun"] = pack_sequence(list(chain(*((torch.from_numpy(seq) for seq in dat["seq_noun"]) for dat in dats))), enforce_sorted=False)
+
+        bat["idx_np"] = torch.arange(len(dats)).repeat_interleave(collate("len_np"))
+        bat["pos_np"] = torch.cat([torch.tensor(dat["pos_np"]) for dat in dats])
+
+        bat["issep"] = pack("issep")
+        bat["idx_noun"] = pack_sequence([idx + torch.zeros(len(dat["pos_noun"])).long()
+                                         for idx, dat in enumerate(dats)], enforce_sorted=False)
+        bat["pos_noun"] = pack("pos_noun")
+
+        bat["idx_nps"] = pack_sequence([idx + torch.zeros(len(dat["pos_nps"])).long()
+                                        for idx, dat in enumerate(dats)], enforce_sorted=False)
+        bat["pos_nps"] = pack("pos_nps")
+        bat["isnp"] = pack("isnp")
+        bat["idx_tag"] = pack_sequence([idx + torch.zeros(len(dat["pos_tag"])).long()
+                                        for idx, dat in enumerate(dats)], enforce_sorted=False)
+        bat["pos_tag"] = pack("pos_tag")
+
+        assert all(len(dat["pos_nps"]) == len(dat["pos_tag"]) for dat in dats)
+        assert all(dat["pos_nps"].max() < len(dat["issep"]) for dat in dats)
 
         return bat
 
@@ -120,6 +266,7 @@ class CFQDataModule(pl.LightningDataModule):
         split_data = np.load(split_data_dir_path)
         self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
         self.dev_dataset = CFQDataset(split_data["devIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
+#       self.test_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
         self.test_dataset = CFQDataset(split_data["testIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
 
     def train_step_count_per_epoch(self):
