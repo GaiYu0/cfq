@@ -1,0 +1,45 @@
+# set of hyperparameters that Yu used to achieve ~65% MCD1 performance
+program: cfq/train.py
+method: random
+parameters:
+  # configurable parameters
+  sweep_mode:
+    value: True
+  wandb_project:
+    value: sweep_mcd1_bert
+  run_dir_root:  # cache data in RAM
+    value: /data/paras/data_cache/cfq
+  num_epochs:
+    value: 200
+  seq_model:
+    value: bert
+  bert_model_version:
+    value: bert-base-cased
+  cfq_split:
+    value: mcd1
+  optimizer_name:
+    value: Adam
+  batch_size:
+    value: 64
+  lr:
+    value: 9.630369613884801e-05
+  seed:
+    distribution: int_uniform
+    min: 2
+    max: 100
+
+  # training parameters to sweep
+  warmup_epochs:
+    value: 18
+  cosine_lr_period:
+    value: 0.06681
+
+  # architectural parameters to sweep
+  w_pos:
+    value: 0.926287848523615
+  ntl_inp:
+    value: 64
+  ntl_hidden_dim:
+    value: 64
+  ntl_bilinear:
+    value: True

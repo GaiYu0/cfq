@@ -1,41 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=cfq_train
-#SBATCH --output=/home/eecs/paras/slurm/cfq/%j.log
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=10
-#SBATCH --mem=50000
-#SBATCH --gres="gpu:1"
-#SBATCH --time=125:00:00
-#SBATCH --exclude=atlas,blaze,r16
-
 set -x
-
-# print host statistics
-set -x
-date;hostname;pwd
-free -mh
-df -h
-gpustat -cup
-nvidia-smi
-free -m | awk 'NR==2{printf "Memory Usage: %s/%sMB (%.2f%%)\n", $3,$2,$3*100/$2 }'
-df -h | awk '$NF=="/"{printf "Disk Usage: %d/%dGB (%s)\n", $3,$2,$5}'
-top -bn1 | grep load | awk '{printf "CPU Load: %.2f\n", $(NF-2)}' 
-chmod 755 -R ~/slurm
-echo "CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES"
-echo "CUDA_DEVICE_ORDER = $CUDA_DEVICE_ORDER"
-echo "SLURM_JOB_ID = $SLURM_JOB_ID"
+export ROOT_DIR="$(dirname "$0")/.."
+cd $ROOT_DIR
 
 eval "$(conda shell.bash hook)"
 
-if conda env list | grep -q '^cfq'; then
-   echo "CFQ environment already installed"
+if ! command -v mamba &> /dev/null; then
+    conda install -y mamba -c conda-forge
+fi
+
+if conda env list | grep -q "^cfq "; then
+    echo "Using previously created cfq environment"
+    mamba env update -n cfq --file environment.yml
 else
-    conda create -y -n cfq python=3.8
-    conda install -y -n cfq python=3.8 mkl tensorflow-gpu
-    conda install -y -n cfq pytorch torchvision cudatoolkit=10.1 -c pytorch
+    echo "Creating new cfq environment"
+    mamba env create -n cfq --file environment.yml
 fi
 conda activate cfq
-pip install torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
+pip install --no-cache torch-scatter==latest+cu102 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
 pip install -e .
 
 # load dataset to data dir
@@ -69,4 +51,6 @@ python cfq/train.py \
     --num_epochs $N_EPOCHS \
     --warmup_epochs $WARMUP_EPOCHS \
     --cosine_lr_period $COSINE_LR_PERIOD \
+    --seq_model bert \
+    --bert_model_version bert-base-uncased \
     --cfq_split "$CFQ_SPLIT"
