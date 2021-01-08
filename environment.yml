@@ -7,7 +7,7 @@ dependencies:
 - mkl
 - tensorflow
 # pytorch
-- pytorch=1.6.0
+- pytorch=1.7.0
 - torchvision
 - torchtext
 - cudatoolkit=10.1

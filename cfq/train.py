@@ -146,7 +146,7 @@ def main(argv):
     # configure loggers and checkpointing
     if FLAGS.mode == "train":
         lr_logger = [LearningRateMonitor(logging_interval="step")]
-        checkpoint_callback = ModelCheckpoint(monitor="valid/emr", save_top_k=5, save_last=True, mode="max")
+        checkpoint_callback = ModelCheckpoint(monitor="valid/emr/dataloader_idx_0", save_top_k=5, save_last=True, mode="max")
         wandb_logger = WandbLogger(
             entity="cfq",
             project=f"{FLAGS.wandb_project}_{FLAGS.cfq_split}",
@@ -157,11 +157,11 @@ def main(argv):
         wandb_logger.watch(model, log="all", log_freq=100)
         for k, v in FLAGS.flag_values_dict().items():
             model.hparams[k] = v
-        flag_save_file = log_dir / "flags.cfg"
+        flag_save_file = log_dir / "flags.txt"
         with flag_save_file.open('w') as f:
             key_flags = FLAGS.get_key_flags_for_module(sys.argv[0])
             f.write('\n'.join(f.serialize() for f in key_flags))
-        # TODO(parasj): Save these files in the logdir to wandb
+        wandb_logger.experiment.save(str(flag_save_file.resolve()))
     else:
         lr_logger = []
         checkpoint_callback = None

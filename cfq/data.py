@@ -164,7 +164,9 @@ class CFQDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
 
     def val_dataloader(self):
-        return DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        val_loader = DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        return [val_loader, test_loader]
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)

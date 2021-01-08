@@ -43,7 +43,7 @@ else
     mamba env create -n $ENV_NAME --file environment.yml
 fi
 conda activate $ENV_NAME
-pip install --no-cache torch-scatter==latest+cu101 -f https://pytorch-geometric.com/whl/torch-1.6.0.html
+pip install --no-cache torch-scatter -f https://pytorch-geometric.com/whl/torch-1.7.0+cu101.html
 pip install -e .
 
 # load dataset to data dir
