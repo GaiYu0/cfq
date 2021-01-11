@@ -302,16 +302,17 @@ class AttentionModel(nn.Module):
         typ : (m, n_typ)
         """
         z_grp = scatter_sum(self.tok_encoder(mem), grp, 0)[pos2grp]
-        '''
-        _, lens = pad_packed_sequence(seq)
-        x_grp = pack_padded_sequence(z_grp, lens, batch_first=True, enforce_sorted=False)
-        '''
-
         x_grp = utils.pack_as(self.tag_encoder(seq.data), seq)
+        '''
+        _, lengths = pad_packed_sequence(seq)
+        x_grp = pack_padded_sequence(z_grp, lengths, batch_first=True, enforce_sorted=False)
+        '''
         h_grp, _ = pad_packed_sequence(self.lstm_encoder(x_grp)[0], batch_first=True)
         h_grp = h_grp.view(-1, h_grp.size(-1)).view(*h_grp.shape)
         q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
         logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, z_grp, msk)], -1))
+#       logit = self.rel(torch.cat([torch.zeros_like(q), self.attention(m, q, h_grp, z_grp, msk)], -1))
+#       logit = self.rel(torch.cat([q, torch.zeros_like(self.attention(m, q, h_grp, z_grp, msk))], -1))
 
         d = {}
         gt = logit.gt(0)

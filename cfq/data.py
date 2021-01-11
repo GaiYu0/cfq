@@ -92,10 +92,6 @@ class CollateFunction:
 
         n = hstack("n")
         m = n * n
-        '''
-        disp = n.cumsum(0).sub(n[0]).repeat_interleave(m)
-        bat["src"], bat["dst"] = hstack("src") + disp, hstack("dst") + disp
-        '''
         bat["src"], bat["dst"] = hstack("src"), hstack("dst")
         bat["typ"] = vstack("typ")
         bat["idx"] = torch.arange(len(m)).repeat_interleave(m)
