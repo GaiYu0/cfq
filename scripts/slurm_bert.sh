@@ -1,18 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=cfq_tune_wandb
+#SBATCH --job-name=cfq_train_bert
 #SBATCH --output=/home/eecs/paras/slurm/cfq/%j.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
-#SBATCH --mem=50000
-#SBATCH --gres="gpu:1"
+#SBATCH --mem=400000
+#SBATCH --gres="gpu:8"
 #SBATCH --time=125:00:00
 #SBATCH --exclude=atlas,blaze,r16,freddie
 
 set -x
 
 # check arguments
-export NJOBS=${NJOBS:-4}
-[ -z "$SWEEPID" ] && { echo "Need to set SWEEPID"; exit 1; }
+[ -z "$FLAGFILE" ] && { echo "Need to set FLAGFILE"; exit 1; }
 
 date;hostname;pwd
 free -mh
@@ -33,7 +32,7 @@ if ! command -v mamba &> /dev/null; then
     conda install -y mamba -c conda-forge
 fi
 
-export ENV_NAME="cfq_wandb_`(echo $CUDA_VISIBLE_DEVICES | cut -d, -f1)`"
+export ENV_NAME="cfq_`(echo $CUDA_VISIBLE_DEVICES | cut -d, -f1)`"
 echo "Conda env name = $ENV_NAME"
 if conda env list | grep -q "^$ENV_NAME "; then
     echo "Using previously created cfq environment $ENV_NAME"
@@ -55,5 +54,8 @@ mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
 rsync -avhW --no-compress --progress $CFQ_DIR $DATA_CACHE
 
-echo "SWEEPID = $SWEEPID"
-wandb agent --count $NJOBS $SWEEPID
+# train!
+python cfq/train.py \
+    --run_dir_root "$RUN_CACHE" \
+    --data_root_path "$DATA_CACHE" \
+    --flagfile "$FLAGFILE"

@@ -1,0 +1,25 @@
+channels:
+- conda-forge
+- pytorch
+- defaults
+dependencies:
+- python=3.8
+- mkl
+- tensorflow
+# pytorch
+- pytorch=1.7.0
+- torchvision
+- torchtext
+- cudatoolkit=10.1
+- cudnn
+- nccl
+- transformers
+- sentencepiece
+- pytorch-lightning
+# data science
+- pandas
+- numpy
+- pyarrow
+- matplotlib
+- seaborn
+- scikit-learn
