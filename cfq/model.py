@@ -5,10 +5,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
-from transformers import AutoConfig, AutoModel
 from torch_scatter import scatter_min, scatter_sum
 
 FLAGS = flags.FLAGS
+# global flags
+flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
+flags.DEFINE_float("w_pos", 1.0, "Positional weight.", lower_bound=0.0, upper_bound=1.0)
+flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
+
+# sequence model flags
+flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
+flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
+flags.DEFINE_integer("seq_hidden_dim", 64, "Sequence hidden dimension")
+flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
+flags.DEFINE_integer("seq_nhead", 16, "Transformer number of heads")
+
+# neural tensor layer flags
+flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
+flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
+flags.DEFINE_boolean("ntl_bilinear", False, "Sequence model is bilinear?")
 
 
 class LSTMModel(nn.Module):
@@ -19,8 +34,8 @@ class LSTMModel(nn.Module):
         self.lstm_encoder = nn.LSTM(ninp, nhid // 2, nlayer, batch_first=True, bidirectional=True)
         self.pos_encoder = PositionalEncoding(ninp, 0.0)
 
-    def forward(self, tok):
-        apply_out = PackedSequence(self.tok_encoder(tok.data), tok.batch_sizes, tok.sorted_indices, tok.unsorted_indices)
+    def forward(self, seq):
+        apply_out = PackedSequence(self.tok_encoder(seq.data), seq.batch_sizes, seq.sorted_indices, seq.unsorted_indices)
         h, _ = self.lstm_encoder(apply_out)
         h, _ = pad_packed_sequence(h, batch_first=True)
         return h
@@ -42,7 +57,7 @@ class PositionalEncoding(nn.Module):
         self.concept = nn.Parameter(1e-3 * torch.randn(d_model))
         self.variable = nn.Parameter(1e-3 * torch.randn(d_model))
 
-    def forward(self, x):
+    def forward(self, x, isvariable, isconcept):
         x = x + self.pe[: x.size(0), :, :]
         return self.dropout(x)
 
@@ -56,9 +71,10 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayer)
         self.ninp = ninp
 
-    def forward(self, tok, ispad):
-        src = self.pos_encoder(self.tok_encoder(tok) * math.sqrt(self.ninp))
-        return self.transformer_encoder(src, src_key_padding_mask=ispad).permute(1, 0, 2)
+    def forward(self, seq):
+        src = self.tok_encoder(seq["tok"]) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src, seq["isvariable"], seq["isconcept"])
+        return self.transformer_encoder(src, src_key_padding_mask=seq["ispad"]).permute(1, 0, 2)
 
 
 class NeuralTensorLayer(nn.Module):
@@ -109,6 +125,7 @@ class Model(nn.Module):
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         if FLAGS.seq_model == "embedding":
+            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_inp)
             raise ValueError()
         elif FLAGS.seq_model == "lstm":
             nout = FLAGS.seq_hidden_dim
@@ -118,10 +135,6 @@ class Model(nn.Module):
             self.seq_encoder = TransformerModel(
                 ntok, FLAGS.seq_inp, FLAGS.seq_nhead, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers, FLAGS.dropout
             )
-        elif FLAGS.seq_model == "bert":
-            self.seq_encoder = AutoModel.from_pretrained(FLAGS.bert_model_version)
-            self.bert_config = AutoConfig.from_pretrained(FLAGS.bert_model_version)
-            nout = self.bert_config.hidden_size
         else:
             raise Exception()
 
@@ -149,11 +162,9 @@ class Model(nn.Module):
         """
         i = torch.arange(len(n)).type_as(tok).repeat_interleave(n).repeat_interleave(n_idx)
         j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
-        if FLAGS.seq_model == "bert":
-            encoder_out = self.seq_encoder(**seq, return_dict=True)['last_hidden_state']  # or pooler_output
-        else:
-            encoder_out = self.seq_encoder(**seq)
-        h = scatter_sum(encoder_out[i, idx, :], j, 0)
+        h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
+
+        #       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 
         d = {}
@@ -163,7 +174,14 @@ class Model(nn.Module):
         em, _ = scatter_min(eq.all(1).int().type_as(tok), torch.arange(len(n)).type_as(tok).repeat_interleave(n * n))
         d["emr"] = em.float().mean()
         if self.training:
+            #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
             nll_pos = -F.logsigmoid(logit[mask]).sum() / len(n)
             nll_neg = -torch.sum(torch.log(1 + 1e-5 - logit[~mask].sigmoid())) / len(n)
             d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
+
+            if g is not None:
+                h_ref = self.gr_model(g)
+                d["norm"] = torch.norm(h - h_ref, p=2, dim=1).mean()
+                d["loss"] = d["nll"] + FLAGS.gamma * d["norm"]
+
         return d, {"em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v]}

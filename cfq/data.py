@@ -1,5 +1,3 @@
-import os
-
 from absl import flags
 import numpy as np
 from loguru import logger
@@ -9,7 +7,6 @@ import torch
 from torch.nn.utils.rnn import pack_sequence
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
-from transformers import AutoTokenizer
 
 FLAGS = flags.FLAGS
 
@@ -65,6 +62,7 @@ class CFQDataset(Dataset):
         d = {k: v[i] for k, v in self.data.items()}
 
         d["ispad"] = len(d["seq"]) * [False]
+
         d["cfq_idx"] = i
 
         n = self.data["n"][i]
@@ -85,24 +83,25 @@ class CollateFunction:
     def __init__(self, tok_vocab, rel_vocab):
         self.tok_vocab = tok_vocab
         self.rel_vocab = rel_vocab
-        self.idx2tok, self.tok2idx = self.tok_vocab
-        self.idx2rel, self.rel2idx = self.rel_vocab
+        _, self.tok2idx = self.tok_vocab
+        _, self.rel2idx = self.rel_vocab
         self.ntok = len(self.tok2idx)
         self.nrel = len(self.rel2idx)
-        self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-        self.pad_idx = self.tok2idx["[PAD]"] if FLAGS.seq_model is not "bert" else self.bert_tokenizer.pad_token_id
 
     def collate_fn(self, samples):
         b = {}
+
         max_len = max(len(s["seq"]) for s in samples)
+        pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
         if FLAGS.seq_model == "lstm":
-            b["seq"] = {"tok": pack_sequence([torch.from_numpy(s["seq"]) for s in samples], enforce_sorted=False)}
+            b["seq"] = pack_sequence([torch.from_numpy(s["seq"]) for s in samples], enforce_sorted=False)
         elif FLAGS.seq_model == "transformer":
-            pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
-            b["seq"] = {"tok": pad("seq", self.pad_idx).t(), "ispad": pad("ispad", True)}
-        elif FLAGS.seq_model == "bert":
-            sample_strs = [" ".join([self.idx2tok[word_idx] for word_idx in s["seq"]]) for s in samples]
-            b["seq"] = self.bert_tokenizer(sample_strs, padding=True, return_tensors="pt", return_attention_mask=True)
+            b["seq"] = {
+                "tok": pad("seq", self.tok2idx["[PAD]"]).t(),
+                "ispad": pad("ispad", True),
+                "isconcept": pad("isconcept", False).t(),
+                "isvariable": pad("isvariable", False).t(),
+            }
         else:
             raise Exception()
 
@@ -149,8 +148,8 @@ class CFQDataModule(pl.LightningDataModule):
         logger.info(f"Initializing dataset at stage {stage}")
         _, tok2idx = self.tok_vocab
         _, rel2idx = self.rel_vocab
-        data = np.load(os.path.join(FLAGS.data_root_path, FLAGS.cfq_data_path))
-        split_data_dir_path = os.path.join(FLAGS.data_root_path, FLAGS.cfq_split_data_dir, f"{FLAGS.cfq_split}.npz")
+        data = np.load(FLAGS.cfq_data_path)
+        split_data_dir_path = Path(FLAGS.cfq_split_data_dir) / f"{FLAGS.cfq_split}.npz"
         logger.info(f"Loading data from {split_data_dir_path}")
         split_data = np.load(split_data_dir_path)
         self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.rel_vocab)
@@ -164,9 +163,7 @@ class CFQDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
 
     def val_dataloader(self):
-        val_loader = DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
-        test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
-        return [val_loader, test_loader]
+        return DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
