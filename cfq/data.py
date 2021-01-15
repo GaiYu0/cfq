@@ -1,6 +1,7 @@
 from absl import flags
 import numpy as np
 from loguru import logger
+import os
 from pathlib import Path
 import pytorch_lightning as pl
 import torch
@@ -110,8 +111,8 @@ class CFQDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         logger.info(f"Initializing dataset at stage {stage}")
-        data = np.load(FLAGS.cfq_data_path)
-        split_data_dir_path = Path(FLAGS.cfq_split_data_dir) / f"{FLAGS.cfq_split}.npz"
+        data = np.load(os.path.join(FLAGS.data_root_path, FLAGS.cfq_data_path))
+        split_data_dir_path = os.path.join(FLAGS.data_root_path, FLAGS.cfq_split_data_dir, f"{FLAGS.cfq_split}.npz")
         logger.info(f"Loading data from {split_data_dir_path}")
         split_data = np.load(split_data_dir_path)
         self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
@@ -125,7 +126,9 @@ class CFQDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
 
     def val_dataloader(self):
-        return DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        val_loader = DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
+        return [val_loader, test_loader]
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
