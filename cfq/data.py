@@ -1,15 +1,14 @@
-import os
-
 from absl import flags
 import numpy as np
 from loguru import logger
 from pathlib import Path
 import pytorch_lightning as pl
 import torch
-from torch.nn.utils.rnn import pack_sequence
+from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
-from transformers import AutoTokenizer
+
+import utils
 
 FLAGS = flags.FLAGS
 
@@ -34,128 +33,90 @@ class RaggedArray:
 
 
 class CFQDataset(Dataset):
-    def __init__(self, idx, data, tok_vocab, rel_vocab):
+    def __init__(self, idx, dat, tok_vocab, tag_vocab, typ_vocab):
         super().__init__()
-        self.tok_vocab, self.rel_vocab = tok_vocab, rel_vocab
-        _, tok2idx = self.tok_vocab
-        ntok = len(tok2idx)
+        idx2typ, _ = typ_vocab
+        self.n_typ = len(idx2typ)
 
         self.idx = idx
-        get = lambda k: data[k] if type(k) is str else k
+        get = lambda k: dat[k] if type(k) is str else k
         rag = lambda x, y: RaggedArray(get(x), np.cumsum(np.hstack([[0], get(y)])))
-        self.data = dict(data.items())
-        self.data["seq"] = rag("seq", "n_tok")
-        self.data["isconcept"], self.data["isvariable"] = rag("isconcept", "n_tok"), rag("isvariable", "n_tok")
-        self.data["n_idx"], self.data["idx"] = rag("n_idx", "n"), rag(rag("idx", "n_idx"), "n")
-        self.data["tok"] = rag("tok", "n")
-        self.data["src"], self.data["dst"], self.data["rel"] = rag("src", "m"), rag("dst", "m"), rag("rel", "m")
-
-        disp = np.hstack([np.zeros(1, dtype=int), data["n"]]).cumsum()
-        disp_ = disp[:-1].repeat(data["m"])
-        tok_src = data["tok"][data["src"] + disp_]
-        tok_dst = data["tok"][data["dst"] + disp_]
-        tok_rel = data["rel"] + ntok
-        self.data["q"] = RaggedArray(np.vstack([tok_src, tok_rel, tok_dst]).T, disp)
+        self.dat = dict(dat.items())
+        self.dat["seq"] = rag("seq", "n_grp")
+        self.dat["n_mem"] = rag("n_mem", "n_grp")
+        self.dat["mem"] = rag(rag("mem", "n_mem"), "n_grp")
+        self.dat["src"], self.dat["dst"], self.dat["typ"] = rag("src", "n_rel"), rag("dst", "n_rel"), rag("typ", "n_rel")
+        
+        self.dat["filter"] = rag("filter", "n_filter")
+        self.dat["idx2grp"] = rag("idx2grp", "n")
 
     def __len__(self):
         return len(self.idx)
 
     def __getitem__(self, key):
-        i = self.idx[key]
-        d = {k: v[i] for k, v in self.data.items()}
+        idx = self.idx[key]
+        for k, v in self.dat.items():
+            try:
+                v[idx]
+            except:
+                assert False, k
+        dat = {k: v[idx] for k, v in self.dat.items()}
 
-        d["ispad"] = len(d["seq"]) * [False]
-        d["cfq_idx"] = i
+        dat["index"] = idx
 
-        n = self.data["n"][i]
-        n_ = np.arange(n)
-        u, v = np.meshgrid(n_, n_)
-        d["u"], d["v"] = u.flatten(), v.flatten()
+        n = self.dat["n"][idx]
+        typ = np.zeros([n, n, self.n_typ], dtype=bool)
+        typ[dat["src"], dat["dst"], dat["typ"]] = True
+        dat["typ"] = typ.reshape([-1, self.n_typ])
 
-        idx2rel, _ = self.rel_vocab
-        nrel = len(idx2rel)
-        mask = np.zeros([n, n, nrel], dtype=bool)
-        mask[d["src"], d["dst"], d["rel"]] = True
-        d["mask"] = mask.reshape([-1, nrel])
+        src, dst = np.meshgrid(dat["idx2grp"], dat["idx2grp"])
+        dat["src"], dat["dst"] = src.flatten(), dst.flatten()
 
-        return d
+        return dat
 
 
 class CollateFunction:
-    def __init__(self, tok_vocab, rel_vocab):
-        self.tok_vocab = tok_vocab
-        self.rel_vocab = rel_vocab
-        self.idx2tok, self.tok2idx = self.tok_vocab
-        self.idx2rel, self.rel2idx = self.rel_vocab
-        self.ntok = len(self.tok2idx)
-        self.nrel = len(self.rel2idx)
-        self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-        self.pad_idx = self.tok2idx["[PAD]"] if FLAGS.seq_model is not "bert" else self.bert_tokenizer.pad_token_id
+    def collate_fn(self, ds):
+        hstack = lambda k: torch.from_numpy(np.hstack([d[k] for d in ds]))
+        vstack = lambda k: torch.from_numpy(np.vstack([d[k] for d in ds]))
 
-    def collate_fn(self, samples):
-        b = {}
-        max_len = max(len(s["seq"]) for s in samples)
-        if FLAGS.seq_model == "lstm":
-            b["seq"] = {"tok": pack_sequence([torch.from_numpy(s["seq"]) for s in samples], enforce_sorted=False)}
-        elif FLAGS.seq_model == "transformer":
-            pad = lambda k, p: torch.from_numpy(np.vstack([np.hstack([s[k], np.full(max_len - len(s[k]), p)]) for s in samples]))
-            b["seq"] = {"tok": pad("seq", self.pad_idx).t(), "ispad": pad("ispad", True)}
-        elif FLAGS.seq_model == "bert":
-            sample_strs = [" ".join([self.idx2tok[word_idx] for word_idx in s["seq"]]) for s in samples]
-            b["seq"] = self.bert_tokenizer(sample_strs, padding=True, return_tensors="pt", return_attention_mask=True)
-        else:
-            raise Exception()
+        bat = {"index" : torch.tensor([d["index"] for d in ds])}
 
-        cat = lambda k: torch.from_numpy(np.hstack([s[k] for s in samples]))
-        b["n"], b["n_idx"], b["idx"] = cat("n"), cat("n_idx"), cat("idx")
-        b["m"], src, dst, b["rel"] = cat("m"), cat("src"), cat("dst"), cat("rel")
+        seq = bat["seq"] = pack_sequence([torch.from_numpy(d["seq"]) for d in ds], enforce_sorted=False)
+        msk, _ = bat["msk"], _ = pad_packed_sequence(utils.pack_as(torch.ones_like(seq.data), seq), batch_first=True)
 
-        offset = torch.tensor([0] + [s["n"] for s in samples[:-1]]).cumsum(0)
+        bat["mem"] = hstack("mem")
+        n_mem = hstack("n_mem")
+        bat["grp"] = torch.arange(len(n_mem)).repeat_interleave(n_mem)
+        bat["pos2grp"] = msk.flatten().cumsum(0).sub(1).view(*msk.shape)
 
-        offset_ = offset.repeat_interleave(b["m"])
-        b["src"] = src + offset_
-        b["dst"] = dst + offset_
+        n = hstack("n")
+        m = n * n
+        bat["src"], bat["dst"] = hstack("src"), hstack("dst")
+        bat["typ"] = vstack("typ")
+        bat["idx"] = torch.arange(len(m)).repeat_interleave(m)
+        bat["m"] = m
 
-        offset_ = offset.repeat_interleave(torch.tensor([len(s["u"]) for s in samples]))
-        b["u"] = cat("u") + offset_
-        b["v"] = cat("v") + offset_
-        b["mask"] = torch.from_numpy(np.vstack([s["mask"] for s in samples]))
-
-        b["tok"] = cat("tok")
-        b["cfq_idx"] = cat("cfq_idx")
-
-        if FLAGS.seq_model == "lstm":
-            max_len = b["m"].max() + 2
-            hd = self.ntok + self.nrel
-            tl = hd + 1
-            b["q"] = torch.from_numpy(
-                np.vstack(
-                    [np.hstack([[hd], s["q"].reshape([-1]), 3 * (max_len - len(s["q"])) * [self.tok2idx["[PAD]"]], [tl]]) for s in samples]
-                )
-            )
-        return b
+        return bat
 
 
 class CFQDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size: int, tok_vocab, rel_vocab):
+    def __init__(self, batch_size: int, tok_vocab, tag_vocab, typ_vocab):
         super().__init__()
         self.batch_size = batch_size
-        self.tok_vocab = tok_vocab
-        self.rel_vocab = rel_vocab
-        collate_fn = CollateFunction(tok_vocab, rel_vocab)
+        self.tok_vocab, self.tag_vocab, self.typ_vocab = tok_vocab, tag_vocab, typ_vocab
+        collate_fn = CollateFunction()
         self.data_kwargs = {"num_workers": FLAGS.num_workers, "collate_fn": collate_fn.collate_fn, "pin_memory": True}
 
     def setup(self, stage=None):
         logger.info(f"Initializing dataset at stage {stage}")
-        _, tok2idx = self.tok_vocab
-        _, rel2idx = self.rel_vocab
-        data = np.load(os.path.join(FLAGS.data_root_path, FLAGS.cfq_data_path))
-        split_data_dir_path = os.path.join(FLAGS.data_root_path, FLAGS.cfq_split_data_dir, f"{FLAGS.cfq_split}.npz")
+        data = np.load(FLAGS.cfq_data_path)
+        split_data_dir_path = Path(FLAGS.cfq_split_data_dir) / f"{FLAGS.cfq_split}.npz"
         logger.info(f"Loading data from {split_data_dir_path}")
         split_data = np.load(split_data_dir_path)
-        self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.rel_vocab)
-        self.dev_dataset = CFQDataset(split_data["devIdxs"], data, self.tok_vocab, self.rel_vocab)
-        self.test_dataset = CFQDataset(split_data["testIdxs"], data, self.tok_vocab, self.rel_vocab)
+        self.train_dataset = CFQDataset(split_data["trainIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
+        self.dev_dataset = CFQDataset(split_data["devIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
+        self.test_dataset = CFQDataset(split_data["testIdxs"], data, self.tok_vocab, self.tag_vocab, self.typ_vocab)
 
     def train_step_count_per_epoch(self):
         return len(self.train_dataset)
@@ -164,9 +125,7 @@ class CFQDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, **self.data_kwargs)
 
     def val_dataloader(self):
-        val_loader = DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
-        test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
-        return [val_loader, test_loader]
+        return DataLoader(self.dev_dataset, batch_size=self.batch_size, **self.data_kwargs)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, **self.data_kwargs)
