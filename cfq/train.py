@@ -148,7 +148,6 @@ def main(argv):
         model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, typ_vocab=typ_vocab, last_epoch=ckpt['epoch'])
 
     # configure loggers and checkpointing
-    
     if FLAGS.mode == "train":
         lr_logger = [LearningRateMonitor(logging_interval="step")]
         checkpoint_callback = ModelCheckpoint(monitor="valid/emr/dataloader_idx_0", save_top_k=5, save_last=True, mode="max")
