@@ -13,7 +13,9 @@ import torch
 import transformers
 
 # from cfq.model import AttentionModel as Model
-from cfq.model import NounPhraseModelV2 as Model
+# from cfq.model import NounPhraseModelV2 as Model
+# from cfq.model import NounPhraseModelV3 as Model
+from cfq.model import NounPhraseModelV4 as Model
 from cfq import DATA_DIR, RUN_DIR_ROOT
 from cfq.data import CFQDataModule
 
@@ -52,7 +54,8 @@ flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lo
 
 flags.DEFINE_string("tok_vocab_path", str(DATA_DIR / "cfq" / "tok-vocab.pickle"), "Token vocab path")
 flags.DEFINE_string("tag_vocab_path", str(DATA_DIR / "cfq" / "tag-vocab.pickle"), "Tag vocab path")
-flags.DEFINE_string("typ_vocab_path", str(DATA_DIR / "cfq" / "rel-vocab.pickle"), "Rel. vocab path")
+flags.DEFINE_string("typ_vocab_path", str(DATA_DIR / "cfq" / "typ-vocab.pickle"), "Rel. vocab path")
+flags.DEFINE_string("symb_vocab_path", str(DATA_DIR / "cfq" / "symb-vocab.pickle"), "Rel. vocab path")
 flags.DEFINE_string("cfq_data_path", str(DATA_DIR / "cfq" / "data.npz"), "Main CFQ data path")
 flags.DEFINE_string("cfq_split_data_dir", str(DATA_DIR / "cfq" / "splits"), "CFQ split data path directory.")
 
@@ -76,10 +79,10 @@ flags.DEFINE_bool("dump_test_pred", False, "Whether to dump test predictions.")
 
 
 class CFQTrainer(pl.LightningModule):
-    def __init__(self, tok_vocab, tag_vocab, typ_vocab, last_epoch=-1):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab, symb_vocab, last_epoch=-1):
         super().__init__()
         self.last_epoch = last_epoch
-        self.model = Model(tok_vocab, tag_vocab, typ_vocab)
+        self.model = Model(tok_vocab, tag_vocab, typ_vocab, symb_vocab)
         self.out = {}
 
     def forward(self, x):
@@ -143,14 +146,15 @@ def main(argv):
     tok_vocab = pickle.load(open(FLAGS.tok_vocab_path, "rb"))
     tag_vocab = pickle.load(open(FLAGS.tag_vocab_path, "rb"))
     typ_vocab = pickle.load(open(FLAGS.typ_vocab_path, "rb"))
+    symb_vocab = pickle.load(open(FLAGS.symb_vocab_path, "rb"))
 
     # load data
-    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, tag_vocab, typ_vocab)
+    data_module = CFQDataModule(FLAGS.batch_size, tok_vocab, tag_vocab, typ_vocab, symb_vocab)
     if FLAGS.resume_from_checkpoint is None:
-        model = CFQTrainer(tok_vocab, tag_vocab, typ_vocab)
+        model = CFQTrainer(tok_vocab, tag_vocab, typ_vocab, symb_vocab)
     else:
         ckpt = torch.load(FLAGS.resume_from_checkpoint)
-        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, typ_vocab=typ_vocab, last_epoch=ckpt['epoch'])
+        model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, typ_vocab=typ_vocab, symb_vocab=symb_vocab, last_epoch=ckpt['epoch'])
 
     # configure loggers and checkpointing
     

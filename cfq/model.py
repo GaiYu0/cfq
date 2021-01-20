@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
 
+from tree_lstm import TreeLSTM
 import utils
 
 FLAGS = flags.FLAGS
@@ -27,6 +28,7 @@ flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower
 flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
 flags.DEFINE_boolean("ntl_bilinear", True, "Sequence model is bilinear?")
 
+flags.DEFINE_integer("arity", 3, "Parse tree arity")
 
 class LSTMModel(nn.Module):
     def __init__(self, ntok, ninp, nhid, nlayer):
@@ -330,10 +332,22 @@ class LSTMEncoder(nn.Module):
         self.embedding = None if n_tok is None else nn.Embedding(n_tok, d_x)
         self.lstm = nn.LSTM(d_x, d_h // 2, n_lay, batch_first=True, bidirectional=True)
 
-    def forward(self, seq, z=None):
+    def forward(self, seq, z=None, view=None):
         seq = seq if self.embedding is None else utils.pack_as(self.embedding(seq.data), seq)
         h, (z, _) = self.lstm(seq, *([] if z is None else [[z, torch.zeros_like(z)]]))
-        h, _ = pad_packed_sequence(h, batch_first=True)
+
+        if view is not None:
+            views = [view] if isinstance(view, str) else view
+            h, n = pad_packed_sequence(h, batch_first=True)
+            def view_as(view):
+                if view == "padded":
+                    return h
+                elif view == "flat":
+                    trues = torch.ones_like(seq.data, dtype=bool)
+                    m, _ = pad_packed_sequence(utils.pack_as(trues, seq), batch_first=True)
+                    return h[m[:, :, 0]]
+            h = [view_as(view) for view in views] + [n]
+
         return h, z
 
 
@@ -446,7 +460,7 @@ class NounPhraseModelV2(nn.Module):
         q = self.q(q).view(-1, 1, d, 1)
         reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
         k, v, m = map(reshape, [self.k(k), v, m])
-        s = k.matmul(q).div(d**0.5).sub(torch.exp(50 * (1 - m.float())) - 1)
+        s = k.matmul(q).div(d**0.5).masked_fill(~m.bool(), float('-inf'))
         return v.mul(s.softmax(1)).sum(1).squeeze()
 
     def forward(self, seq_tag, seq_noun,
@@ -476,5 +490,150 @@ class NounPhraseModelV2(nn.Module):
         d["emr"] = em.float().mean()
         if self.training:
             d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(h_grp)
+
+        return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
+
+
+class Attention(nn.Module):
+    def __init__(self, d_q, d_k, d_z):
+        super().__init__()
+        self.d_z = d_z
+        self.q = nn.Linear(d_q, d_z)
+        self.k = nn.Linear(d_k, d_z)
+
+    def forward(self, nq, q, k, v, m):
+        """
+        Parameters
+        ----------
+        nq : (n,)
+        q : (nq.sum(), d_q)
+        k : (n, l, d_k)
+        v : (n, l, d)
+        m : (n, l)
+
+        Returns
+        -------
+        (nq.sum(), d)
+        """
+        n, l = m.shape
+        q = self.q(q).view(-1, 1, self.d_z, 1)
+        reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
+        k, v, m = map(reshape, [self.k(k), v, m])
+        s = k.matmul(q).div(self.d_z**0.5).masked_fill(~m, float('-inf'))
+        return v.mul(s.softmax(1)).sum(1).view(-1, v.size(-1))
+
+
+class NounPhraseModelV3(nn.Module):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2tag, self.tag2idx = tag_vocab
+        self.idx2typ, self.typ2idx = typ_vocab
+        n_tok, n_tag, n_typ = len(self.idx2tok), len(self.idx2tag), len(self.idx2typ)
+
+        d_x, d_h, n_lay = _, self.d_h, self.n_lay = FLAGS.seq_inp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers
+        self.tok_embedding = nn.Embedding(n_tok, d_x)
+        self.tag_encoder = LSTMEncoder(n_tag + 2, d_x, d_h, n_lay)
+        self.noun_encoder = LSTMEncoder(n_tag, d_x, d_h, n_lay)
+        self.np_encoder = LSTMEncoder(None, n_lay * d_h, d_h, n_lay)
+        self.var_encoder = LSTMEncoder(n_tag, d_x, d_h, n_lay)
+        self.tag2np = nn.Linear(d_h, n_lay * d_h)
+        self.att_noun = Attention(d_h, d_h, d_h)
+        self.att_all = Attention(2 * d_h, d_h, d_h)
+        self.rel = nn.Linear(2 * d_h + d_x, n_typ)
+
+        self.encoder = LSTMEncoder(None, d_h, d_h, n_lay)
+
+    def forward(self, seq_tag, seq_noun, seq_var, seq_np,
+                idx_np, pos_np,
+                idx_noun, pos_noun, mask_noun,
+                idx_all, pos_all, isvar, isnoun, istag,
+                m, idx, src, dst, typ, mem, grp, pos2grp, **kwargs):
+        [h_tag, _], z_tag = self.tag_encoder(seq_tag, view="padded")
+
+        z_np = F.relu(self.tag2np(h_tag[idx_np, pos_np]))
+        z_np = z_np.view(-1, 2 * self.n_lay, self.d_h // 2).permute(1, 0, 2)
+        [h_noun, _], z_noun = self.noun_encoder(seq_noun, z_np, view="padded")
+
+        _, z = self.np_encoder(utils.pack_as(z_noun.permute(1, 0, 2).reshape(z_noun.size(1), -1)[seq_np.data], seq_np))
+        [h_var, h_var_, n_var], _ = self.var_encoder(seq_var, z, view=["flat", "padded"])
+        h_noun_ = h_noun[idx_noun, pos_noun]
+        h_var = self.att_noun(n_var.cuda(), h_var, h_noun_, h_noun_, mask_noun)
+
+        where = lambda x, m: x.where(m, torch.zeros_like(x))
+        index = lambda h, m: h[where(idx_all, m), where(pos_all, m)]
+        h_all = index(h_var_, isvar).where(isvar[:, :, None], index(h_noun, isnoun).where(isnoun[:, :, None], index(h_tag, istag)))
+
+        q = torch.cat([h_all[idx, src], h_all[idx, dst]], -1)
+        x_all = scatter_sum(self.tok_embedding(mem), grp, 0)[pos2grp]
+        crop = lambda x: x[:, :x_all.size(1)]
+        logit = self.rel(torch.cat([q, self.att_all(m, q, crop(h_all), x_all, crop(istag | isnoun))], -1))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(typ)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), idx)
+        d["emr"] = em.float().mean()
+        if self.training:
+            d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(m)
+
+        return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
+
+
+class NounPhraseModelV4(nn.Module):
+    def __init__(self, tok_vocab, tag_vocab, typ_vocab, symb_vocab):
+        super().__init__()
+        self.idx2tok, self.tok2idx = tok_vocab
+        self.idx2tag, self.tag2idx = tag_vocab
+        self.idx2typ, self.typ2idx = typ_vocab
+        self.idx2symb, self.symb2idx = symb_vocab
+        n_tok, n_tag, n_typ, n_symb = len(self.idx2tok), len(self.idx2tag), len(self.idx2typ), len(self.idx2symb)
+
+        d_x, d_h, n_lay = _, self.d_h, self.n_lay = FLAGS.seq_inp, FLAGS.seq_hidden_dim, FLAGS.seq_nlayers
+        self.tok_embedding = nn.Embedding(n_tok, d_x)
+        self.tag_encoder = LSTMEncoder(n_tag + 2, d_x, d_h, n_lay)
+        self.noun_encoder = TreeLSTM(n_symb, d_x, d_h, FLAGS.arity)
+        self.encoder = LSTMEncoder(None, d_h, d_h, n_lay)
+        self.var_encoder = LSTMEncoder(n_tag, d_x, d_h, n_lay)
+        self.tag2np = nn.Linear(d_h, n_lay * d_h)
+        self.att_node = Attention(d_h, d_h, d_h)
+        self.att_all = Attention(2 * d_h, d_h, d_h)
+        self.rel = nn.Linear(2 * d_h + d_x, n_typ)
+
+    def forward(self, seq_tag, seq_noun, seq_var, seq_np,
+                idx_np, pos_np,
+                gr, idx_node, mask_node, idx_leaf,
+                idx_all, pos_all, isvar, isnoun, istag,
+                m, idx, src, dst, typ, mem, grp, pos2grp, **kwargs):
+        [h_tag, _], z_tag = self.tag_encoder(seq_tag, view="padded")
+
+        z_np = h_tag[idx_np, pos_np]
+#       z_np = F.relu(self.tag2np(h_tag[idx_np, pos_np]))
+
+        h_node, h_root = self.noun_encoder(gr, z_np)
+
+        _, z_root = self.encoder(utils.pack_as(h_root[seq_np.data], seq_np))
+        [h_var, h_var_, n_var], _ = self.var_encoder(seq_var, z_root, view=["flat", "padded"])
+        h_node_ = h_node[idx_node]
+        h_var = self.att_node(n_var.cuda(), h_var, h_node_, h_node_, mask_node)  # TODO .cuda()
+
+        where = lambda x, m: x.where(m, torch.zeros_like(x))
+        index = lambda h, m: h[where(idx_all, m), where(pos_all, m)]
+        h_all = index(h_var_, isvar).where(isvar[:, :, None], index(h_node[idx_leaf], isnoun).where(isnoun[:, :, None], index(h_tag, istag)))
+
+        q = torch.cat([h_all[idx, src], h_all[idx, dst]], -1)
+        x_all = scatter_sum(self.tok_embedding(mem), grp, 0)[pos2grp]
+        crop = lambda x: x[:, :x_all.size(1)]
+        logit = self.rel(torch.cat([q, self.att_all(m, q, crop(h_all), x_all, crop(istag | isnoun))], -1))
+
+        d = {}
+        gt = logit.gt(0)
+        eq = gt.eq(typ)
+        d["acc"] = eq.float().mean()
+        em, _ = scatter_min(eq.all(1).int(), idx)
+        d["emr"] = em.float().mean()
+        if self.training:
+            d["loss"] = d["nll"] = F.binary_cross_entropy_with_logits(logit, typ.float(), reduction='sum') / len(m)
 
         return d, {"index" : kwargs["index"], "em": em, "typ_true": typ, "typ_pred": gt, "logit" : logit}
