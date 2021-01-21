@@ -34,6 +34,8 @@ if __name__ == "__main__":
     cmds = []
 
     cmds.extend(dl_cmds("cfq.tar.gz", True, local_path))
+    cmds.extend(dl_cmds("cfq_original.tar.gz", True, local_path))
+    cmds.extend(dl_cmds("cfq_attention.tar.gz", True, local_path))
 
     print("\n".join(cmds))
 
