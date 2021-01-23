@@ -66,6 +66,11 @@ flags.DEFINE_integer("seq_hidden_dim", 256, "Sequence hidden dimension")
 flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
 flags.DEFINE_integer("seq_nhead", 0, "Transformer number of heads")
 
+# bert model flags
+flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
+flags.DEFINE_boolean("use_bert_encoder", False, "Use BERT encoder alongside LSTM")
+flags.DEFINE_string("bert_model_version", "bert-base-uncased", "Pre-trained transformers model for transfer learning.")
+
 # neural tensor layer flags
 flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
 flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")

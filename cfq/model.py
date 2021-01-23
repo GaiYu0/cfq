@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
+from transformers import AutoConfig, AutoModel
 from cfq import utils
 
 FLAGS = flags.FLAGS
@@ -55,8 +56,7 @@ class TransformerModel(nn.Module):
         self.ninp = ninp
 
     def forward(self, seq):
-        src = self.tok_encoder(seq["tok"]) * math.sqrt(self.ninp)
-        src = self.pos_encoder(src)
+        src = self.pos_encoder(self.tok_encoder(seq["tok"]) * math.sqrt(self.ninp))
         return self.transformer_encoder(src, src_key_padding_mask=seq["ispad"]).permute(1, 0, 2)
 
 
@@ -252,6 +252,10 @@ class AttentionModel(nn.Module):
         self.k = nn.Linear(dh, dh)
         self.rel = nn.Linear(2 * dh + dx, n_typ)
         self.bn = nn.BatchNorm1d(dh)
+        if self.use_bert_encoder:
+            self.bert_encoder = AutoModel.from_pretrained(FLAGS.bert_model_version)
+            self.bert_config = AutoConfig.from_pretrained(FLAGS.bert_model_version)
+            self.bert_out_dim = self.bert_config.hidden_size
 
     def attention(self, nq, q, k, v, m):
         """
@@ -292,6 +296,10 @@ class AttentionModel(nn.Module):
         h_grp, _ = pad_packed_sequence(self.lstm_encoder(x_grp)[0], batch_first=True)
         q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
         logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, z_grp, msk)], -1))
+        
+        if FLAGS.use_bert_encoder:
+            h_bert = self.bert_encoder(**seq, return_dict=True)['last_hidden_state']
+            print(logit.shape, h_bert.shape)
 
         d = {}
         gt = logit.gt(0)

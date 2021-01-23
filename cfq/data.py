@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 
-import utils
+from cfq import utils
 
 FLAGS = flags.FLAGS
 
@@ -73,10 +73,19 @@ class CFQDataset(Dataset):
         src, dst = np.meshgrid(dat["idx2grp"], dat["idx2grp"])
         dat["src"], dat["dst"] = src.flatten(), dst.flatten()
 
+        import pdb
+        pdb.set_trace()
+        # sample_strs = [" ".join([self.idx2tok[word_idx] for word_idx in s["seq"]]) for s in samples]
+
         return dat
 
 
 class CollateFunction:
+    def __init__(self):
+        if FLAGS.use_bert_encoder:
+            self.bert_tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
+            self.bert_pad_idx = self.bert_tokenizer.pad_token_id
+
     def collate_fn(self, ds):
         hstack = lambda k: torch.from_numpy(np.hstack([d[k] for d in ds]))
         vstack = lambda k: torch.from_numpy(np.vstack([d[k] for d in ds]))
@@ -97,6 +106,10 @@ class CollateFunction:
         bat["typ"] = vstack("typ")
         bat["idx"] = torch.arange(len(m)).repeat_interleave(m)
         bat["m"] = m
+
+        if FLAGS.use_bert_encoder:
+            bat["bert_seq"] = self.bert_tokenizer(
+                sample_strs, padding=True, return_tensors="pt", return_attention_mask=True)
 
         return bat
 
