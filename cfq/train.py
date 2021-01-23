@@ -82,7 +82,15 @@ class CFQTrainer(pl.LightningModule):
         raise NotImplementedError()
 
     def place_batch(self, batch):
-        return {k: self.place_batch(v) if type(v) is dict else v.to(self.device) for k, v in batch.items()}
+        out = {}
+        for k, v in batch.items():
+            if type(v) is dict:
+                out[k] = self.place_batch(v)
+            elif type(v) is tuple:
+                out[k] = [x.to(self.device) for x in v]
+            else:
+                out[k] = v.to(self.device)
+        return out
 
     def compute_f1(self, rel_true, rel_pred):
         p, r, f1, _ = precision_recall_fscore_support(rel_true, rel_pred, average="macro")
