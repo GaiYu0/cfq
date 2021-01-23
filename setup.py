@@ -26,10 +26,9 @@ setup(
         "pytorch-lightning>=1.1.0",
         "sacremoses",
         "sentencepiece",
-        "tokenizers",
         "torch>=1.7.0",
         "torchtext",
-        "transformers>=4.0.0",
+        "transformers",
         "wandb>=0.10.12",
         "torch-scatter>=2.0.5"
     ],

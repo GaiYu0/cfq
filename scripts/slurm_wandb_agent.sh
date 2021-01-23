@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=cfq_tune_wandb
-#SBATCH --output=/home/eecs/paras/slurm/cfq/%j.log
+#SBATCH --output=/home/eecs/paras/slurm/cfq/%j
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
 #SBATCH --mem=50000

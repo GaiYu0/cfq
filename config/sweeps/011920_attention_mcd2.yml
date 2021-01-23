@@ -1,13 +1,15 @@
 program: cfq/train.py
 method: bayes
 metric:
-  name: valid/emr
+  name: valid/emr/dataloader_idx_0
   goal: maximize
-early_terminate:
-  type: hyperband
-  min_iter: 9
+# early_terminate:
+#   type: hyperband
+#   min_iter: 9
 parameters:
   # configurable parameters
+  num_epochs:
+    value: 200
   sweep_mode:
     value: True
   wandb_project:
@@ -21,10 +23,10 @@ parameters:
   batch_size:
     distribution: categorical
     values:
-    - 32
-    - 64
     - 128
     - 256
+    - 512
+    - 1024
   lr:
     distribution: uniform
     min: 0.0001
@@ -34,34 +36,34 @@ parameters:
   warmup_epochs:
     distribution: int_uniform
     min: 0
-    max: 5
+    max: 30
   cosine_lr_period:
     distribution: uniform
     min: 0
-    max: 0.5
+    max: 0.6
 
   # architectural parameters to sweep
   dropout:
     distribution: uniform
     min: 0
-    max: 0.2
+    max: 0.5
   seq_inp:
-    distribution: categorical
-    values:
-    - 32
-    - 64
-    - 128
-    - 256
-  seq_hidden_dim:
     distribution: categorical
     values:
     - 64
     - 128
     - 256
     - 512
+  seq_hidden_dim:
+    distribution: categorical
+    values:
+    - 128
+    - 256
+    - 512
+    - 1024
+    - 2048
   seq_nlayers:
     distribution: categorical
     values:
     - 2
     - 3
-    - 4
