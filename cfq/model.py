@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
-import utils
+from cfq import utils
 
 FLAGS = flags.FLAGS
 
