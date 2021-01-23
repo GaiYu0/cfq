@@ -257,8 +257,6 @@ class AttentionModel(nn.Module):
         reshape = lambda x: x.view(n, l, 1, -1).repeat_interleave(nq, 0)
         k, v, m = map(reshape, [self.k(k), v, m])
         s = k.matmul(q).div(d**0.5).masked_fill(~m.bool(), float('-inf'))
-#       s = k.matmul(q).masked_fill(~m.bool(), float('-inf'))
-#       s = k.matmul(q).div(d**0.5).sub(torch.exp(50 * (1 - m.float())) - 1)
         return v.mul(s.softmax(1)).sum(1).squeeze()
 
     def forward(self, seq, mem, grp, pos2grp, msk, src, dst, typ, idx, m, **kwargs):
