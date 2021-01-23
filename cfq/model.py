@@ -1,31 +1,13 @@
-import math
-
 from absl import flags
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_sequence, pack_padded_sequence, pad_packed_sequence, PackedSequence
 from torch_scatter import scatter_min, scatter_sum
-
 import utils
 
 FLAGS = flags.FLAGS
-# global flags
-flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
-flags.DEFINE_float("w_pos", 1.0, "Positional weight.", lower_bound=0.0, upper_bound=1.0)
-flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
-
-# sequence model flags
-flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")
-flags.DEFINE_integer("seq_inp", 64, "Sequence input dimension")
-flags.DEFINE_integer("seq_hidden_dim", 256, "Sequence hidden dimension")
-flags.DEFINE_integer("seq_nlayers", 2, "Sequence model depth")
-flags.DEFINE_integer("seq_nhead", 0, "Transformer number of heads")
-
-# neural tensor layer flags
-flags.DEFINE_integer("ntl_inp", 64, "Neural tensor layer input dimension", lower_bound=0)
-flags.DEFINE_integer("ntl_hidden_dim", 64, "Neural tensor layer hidden dimension")
-flags.DEFINE_boolean("ntl_bilinear", True, "Sequence model is bilinear?")
 
 
 class LSTMModel(nn.Module):
@@ -58,7 +40,7 @@ class PositionalEncoding(nn.Module):
         self.concept = nn.Parameter(1e-3 * torch.randn(d_model))
         self.variable = nn.Parameter(1e-3 * torch.randn(d_model))
 
-    def forward(self, x, isvariable, isconcept):
+    def forward(self, x):
         x = x + self.pe[: x.size(0), :, :]
         return self.dropout(x)
 
@@ -74,7 +56,7 @@ class TransformerModel(nn.Module):
 
     def forward(self, seq):
         src = self.tok_encoder(seq["tok"]) * math.sqrt(self.ninp)
-        src = self.pos_encoder(src, seq["isvariable"], seq["isconcept"])
+        src = self.pos_encoder(src)
         return self.transformer_encoder(src, src_key_padding_mask=seq["ispad"]).permute(1, 0, 2)
 
 
@@ -110,8 +92,6 @@ class NeuralTensorLayer(nn.Module):
         linear = self.v.matmul(torch.cat([hd, tl], 1).t())
         if self.bilinear:
             bilinear = self.w.matmul(hd.t()).permute(0, 1, 3, 2).unsqueeze(3).matmul(tl.unsqueeze(2)).squeeze()
-            #           return self.u.bmm(torch.tanh(bilinear + linear + self.b)).squeeze(1).t()
-            #           return self.u.bmm(torch.tanh(bilinear / hd.size(1) ** 0.5 + linear + self.b)).squeeze(1).t()
             normalize = lambda x: self.bn(x.view(self.nrel * self.nhid, -1).t()).t().view(self.nrel, self.nhid, -1)
             return self.u.bmm(torch.tanh(normalize(bilinear + linear + self.b))).squeeze(1).t()
         else:
@@ -126,7 +106,6 @@ class Model(nn.Module):
         ntok, nrel = len(self.idx2tok), len(self.idx2rel)
 
         if FLAGS.seq_model == "embedding":
-            # self.seq_encoder = EmbeddingModel(ntok, FLAGS.ntl_inp)
             raise ValueError()
         elif FLAGS.seq_model == "lstm":
             nout = FLAGS.seq_hidden_dim
@@ -165,7 +144,6 @@ class Model(nn.Module):
         j = torch.arange(n.sum()).type_as(tok).repeat_interleave(n_idx)
         h = scatter_sum(self.seq_encoder(seq)[i, idx, :], j, 0)
 
-        #       logit = self.ntl(self.bn_src(h[src]), self.bn_dst(h[dst]))
         logit = self.ntl(self.bn_src(self.linear_src(h[u])), self.bn_dst(self.linear_dst(h[v])))
 
         d = {}
@@ -175,16 +153,9 @@ class Model(nn.Module):
         em, _ = scatter_min(eq.all(1).int().type_as(tok), torch.arange(len(n)).type_as(tok).repeat_interleave(n * n))
         d["emr"] = em.float().mean()
         if self.training:
-            #           d['loss'] = d['nll'] = -logit.log_softmax(1).gather(1, rel.unsqueeze(1)).mean()
             nll_pos = -F.logsigmoid(logit[mask]).sum() / len(n)
             nll_neg = -torch.sum(torch.log(1 + 1e-5 - logit[~mask].sigmoid())) / len(n)
             d["loss"] = d["nll"] = FLAGS.w_pos * nll_pos + nll_neg
-
-            if g is not None:
-                h_ref = self.gr_model(g)
-                d["norm"] = torch.norm(h - h_ref, p=2, dim=1).mean()
-                d["loss"] = d["nll"] + FLAGS.gamma * d["norm"]
-
         return d, {"cfq_idx" : kwargs['cfq_idx'], "n" : n, "em": em, "rel_true": mask, "rel_pred": gt, "u": tok[u], "v": tok[v], "logit" : logit}
 
 
