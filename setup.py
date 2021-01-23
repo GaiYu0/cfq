@@ -9,6 +9,8 @@ setup(
         "absl-py",
         "tqdm",
         "loguru",
+        "certifi",
+        "requests",
 
         # Data
         "matplotlib",
