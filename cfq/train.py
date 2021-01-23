@@ -46,7 +46,7 @@ flags.DEFINE_integer("checkpoint_epoch_idx", -1, "Epoch ID for checkpoint (-1 = 
 # optimizer configuration
 flags.DEFINE_enum("optimizer_name", "Adam", ["Adam", "SGD"], "Optimizer name.")
 flags.DEFINE_integer("batch_size", 64, "Total batch size.", lower_bound=1)
-flags.DEFINE_float("gradient_clip_val", 0.0, "Gradient scale value.")
+flags.DEFINE_float("gradient_clip_val", 0, "Gradient scale value.")
 flags.DEFINE_float("lr", 1e-3, "Learning rate.", lower_bound=0)
 flags.DEFINE_integer("warmup_epochs", 5, "Warmup steps to peak, set to None to disable LR scheduler.", lower_bound=0)
 flags.DEFINE_integer("num_epochs", 100, "Number of training epochs.", lower_bound=1)
@@ -57,6 +57,7 @@ flags.DEFINE_float("cosine_lr_period", 0.5, "Cosine learning rate schedule.", lo
 flags.DEFINE_float("gamma", 1.0, "Gamma.", lower_bound=0.0, upper_bound=1.0)
 flags.DEFINE_float("w_pos", 1.0, "Positional weight.", lower_bound=0.0, upper_bound=1.0)
 flags.DEFINE_float("dropout", 0.0, "Dropout value", lower_bound=0.0)
+flags.DEFINE_enum("recurrent_layer", "LSTM", ["LSTM", "GRU"], "Recurrent unit to use for attention model.")
 
 # sequence model flags
 flags.DEFINE_enum("seq_model", "lstm", ["lstm", "transformer"], "Sequence model implementation.")

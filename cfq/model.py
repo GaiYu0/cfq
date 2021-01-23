@@ -231,8 +231,23 @@ class AttentionModel(nn.Module):
         dx, dh = FLAGS.seq_inp, FLAGS.seq_hidden_dim
         self.tok_encoder = nn.Embedding(n_tok, dx)
         self.tag_encoder = nn.Embedding(n_tag, dx)
-        self.lstm_encoder = nn.LSTM(dx, dh // 2, FLAGS.seq_nlayers,
-                                    batch_first=True, bidirectional=True)
+        if FLAGS.recurrent_layer == "LSTM":
+            self.lstm_encoder = nn.LSTM(
+                dx, dh // 2,
+                FLAGS.seq_nlayers,
+                batch_first=True,
+                bidirectional=True,
+                dropout=FLAGS.dropout)
+        elif FLAGS.recurrent_layer == "GRU":
+            self.lstm_encoder = nn.GRU(
+                dx, dh // 2,
+                FLAGS.seq_nlayers,
+                batch_first=True,
+                bidirectional=True,
+                dropout=FLAGS.dropout)
+        else:
+            raise ValueError()
+        
         self.q = nn.Linear(2 * dh, dh)
         self.k = nn.Linear(dh, dh)
         self.rel = nn.Linear(2 * dh + dx, n_typ)
@@ -274,10 +289,6 @@ class AttentionModel(nn.Module):
         """
         z_grp = scatter_sum(self.tok_encoder(mem), grp, 0)[pos2grp]
         x_grp = utils.pack_as(self.tag_encoder(seq.data), seq)
-        '''
-        _, lengths = pad_packed_sequence(seq)
-        x_grp = pack_padded_sequence(z_grp, lengths, batch_first=True, enforce_sorted=False)
-        '''
         h_grp, _ = pad_packed_sequence(self.lstm_encoder(x_grp)[0], batch_first=True)
         q = torch.cat([h_grp[idx, src], h_grp[idx, dst]], -1)
         logit = self.rel(torch.cat([q, self.attention(m, q, h_grp, z_grp, msk)], -1))

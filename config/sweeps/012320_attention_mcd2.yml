@@ -1,0 +1,74 @@
+program: cfq/train.py
+method: bayes
+metric:
+  name: valid/emr/dataloader_idx_0
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 9
+parameters:
+  # configurable parameters
+  num_epochs:
+    value: 100
+  sweep_mode:
+    value: True
+  wandb_project:
+    value: factorized
+  run_dir_root:  # cache data in RAM
+    value: /data/paras/data_cache/cfq
+  cfq_split:
+    value: mcd2
+  optimizer_name:
+    value: Adam
+  batch_size:
+    distribution: categorical
+    values:
+    - 128
+    - 256
+    - 512
+    - 1024
+    - 2048
+  lr:
+    distribution: uniform
+    min: 0.0001
+    max: 0.01
+
+  # training parameters to sweep
+  warmup_epochs:
+    distribution: categorical
+    values:
+    - 0
+    - 5
+    - 10
+    - 20
+  cosine_lr_period:
+    distribution: uniform
+    min: 0.0
+    max: 0.55
+  gradient_clip_val:
+    distribution: categorical
+    values:
+    - 0
+    - 1.
+  # architectural parameters to sweep
+  dropout:
+    distribution: uniform
+    min: 0
+    max: 0.5
+  seq_inp:
+    distribution: categorical
+    values:
+    - 16
+    - 32
+    - 64
+    - 128
+  seq_hidden_dim:
+    distribution: categorical
+    values:
+    - 64
+    - 128
+    - 256
+  seq_nlayers:
+    distribution: int_uniform
+    min: 2
+    max: 5
