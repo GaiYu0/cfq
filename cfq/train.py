@@ -203,7 +203,7 @@ def main(argv):
     # train
     if FLAGS.mode == "train":
         trainer.fit(model, datamodule=data_module)
-    result = trainer.test(model, datamodule=data_module)
+    result = trainer.test(datamodule=data_module)
     logger.info(f"Result of evaluation: {result}")
 
     if FLAGS.dump_test_pred:
