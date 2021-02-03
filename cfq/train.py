@@ -44,7 +44,7 @@ flags.DEFINE_string("resume_from_checkpoint", None, "Path to checkpoint, if resu
 flags.DEFINE_integer("checkpoint_epoch_idx", -1, "Epoch ID for checkpoint (-1 = infer from checkpoint).")
 
 # optimizer configuration
-flags.DEFINE_enum("optimizer_name", "Adam", ["Adam", "SGD"], "Optimizer name.")
+flags.DEFINE_enum("optimizer_name", "Adam", ["AdamW", "Adam", "SGD"], "Optimizer name.")
 flags.DEFINE_integer("batch_size", 64, "Total batch size.", lower_bound=1)
 flags.DEFINE_float("gradient_clip_val", 0, "Gradient scale value.")
 flags.DEFINE_float("lr", 1e-3, "Learning rate.", lower_bound=0)
@@ -132,7 +132,7 @@ class CFQTrainer(pl.LightningModule):
         if FLAGS.warmup_epochs is None:
             return optimizer
         else:
-            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, FLAGS.warmup_epochs, FLAGS.num_epochs + 1, last_epoch=self.last_epoch)
+            scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, FLAGS.warmup_epochs, FLAGS.num_epochs + 1, num_cycles=FLAGS.cosine_lr_period, last_epoch=self.last_epoch)
             return [optimizer], [scheduler]
 
 

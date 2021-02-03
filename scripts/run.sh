@@ -41,6 +41,7 @@ else
     echo "Creating new cfq environment $ENV_NAME"
     mamba env create -n $ENV_NAME --file environment.yml
 fi
+mamba install -y -n $ENV_NAME pytorch torchvision torchaudio cudatoolkit=10.1 -c pytorch
 conda activate $ENV_NAME
 pip install --no-cache torch-scatter -f https://pytorch-geometric.com/whl/torch-1.7.0+cu101.html
 pip install -e .
@@ -54,6 +55,7 @@ mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
 rsync -avhW --no-compress --progress $CFQ_DIR $DATA_CACHE
 
+which python
 # train!
 python cfq/train.py \
     --run_dir_root "$RUN_CACHE" \
