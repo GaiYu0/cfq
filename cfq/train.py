@@ -138,7 +138,9 @@ class CFQTrainer(pl.LightningModule):
 
 def main(argv):
     pl.seed_everything(FLAGS.seed)
+    print(FLAGS.run_dir_root, FLAGS.data_root_path)
     log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(FLAGS.run_name, str(datetime.now().strftime("%m%d%y_%H%M%S")))
+    print(log_dir)
     logger.info(f"Saving logs to {log_dir}")
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -186,6 +188,7 @@ def main(argv):
         gpus=FLAGS.gpus,
         accelerator="ddp" if torch.cuda.device_count() > 1 else None,
         benchmark=not FLAGS.debug,
+        deterministic=True,
         # logging
         log_every_n_steps=10,
         flush_logs_every_n_steps=250,

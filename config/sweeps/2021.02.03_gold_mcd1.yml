@@ -1,0 +1,67 @@
+program: cfq/train.py
+method: grid
+metric:
+  name: valid/emr/dataloader_idx_0
+  goal: maximize
+parameters:
+  # configurable parameters
+  seed:
+    distribution: categorical
+    values:
+    - 2
+    - 3
+    - 32
+    - 42
+
+  num_epochs:
+    value: 100
+  sweep_mode:
+    value: True
+  wandb_project:
+    value: gold_tuned_sweep_seeds
+  cfq_split:
+    value: mcd1
+  optimizer_name:
+    distribution: categorical
+    values:
+    - AdamW
+  batch_size:
+    distribution: categorical
+    values:
+    - 512
+  lr:
+    distribution: categorical
+    values:
+    - 0.005
+
+  # training parameters to sweep
+  warmup_epochs:
+    distribution: categorical
+    values:
+    - 0
+  cosine_lr_period:
+    distribution: categorical
+    values:
+    - 0.5
+  gradient_clip_val:
+    distribution: categorical
+    values:
+    - 5.
+
+  # architectural parameters to sweep
+  dropout:
+    distribution: categorical
+    values:
+    - 0.5
+  seq_inp:
+    distribution: categorical
+    values:
+    - 16
+  seq_hidden_dim:
+    distribution: categorical
+    values:
+    - 128
+  seq_nlayers:
+    distribution: categorical
+    values:
+    - 3

@@ -1,0 +1,62 @@
+export NJOBS=1
+
+wandb sweep -e cfq -p eval_seeds_mcd3 config/sweeps/2021.02.03_gold_mcd3.yml                                                        
+export SWEEPID=cfq/eval_seeds_mcd3/cno313js
+repeat 8 { sbatch --gres="gpu:1" --nodelist=pavia scripts/slurm_wandb_agent.sh }
+repeat 2 { sbatch --gres="gpu:1" --nodelist=flaminio scripts/slurm_wandb_agent.sh }
+
+wandb sweep -e cfq -p eval_seeds_mcd2 config/sweeps/2021.02.03_gold_mcd2.yml
+export SWEEPID=cfq/eval_seeds_mcd2/bs8edj0s
+repeat 7 { sbatch --gres="gpu:1" --nodelist=zanino scripts/slurm_wandb_agent.sh }
+repeat 3 { sbatch --gres="gpu:1" --nodelist=luigi scripts/slurm_wandb_agent.sh }
+
+wandb sweep -e cfq -p eval_seeds_mcd1 config/sweeps/2021.02.03_gold_mcd1.yml
+export SWEEPID=cfq/eval_seeds_mcd1/iva3d1zl
+repeat 2 { sbatch --gres="gpu:1" --nodelist=luigi scripts/slurm_wandb_agent.sh }
+repeat 8 { sbatch --gres="gpu:1" --nodelist=ace scripts/slurm_wandb_agent.sh }
+
+
+
+ % repeat 8 { sbatch --gres="gpu:1" --nodelist=pavia scripts/slurm_wandb_agent.sh }
+Submitted batch job 103203
+Submitted batch job 103204
+Submitted batch job 103205
+Submitted batch job 103206
+Submitted batch job 103207
+Submitted batch job 103208
+Submitted batch job 103209
+Submitted batch job 103210
+paras@watson /work/paras/code/cfq
+ % repeat 2 { sbatch --gres="gpu:1" --nodelist=flaminio scripts/slurm_wandb_agent.sh }
+Submitted batch job 103211
+Submitted batch job 103212
+
+paras@watson /work/paras/code/cfq
+ % repeat 7 { sbatch --gres="gpu:1" --nodelist=zanino scripts/slurm_wandb_agent.sh }
+Submitted batch job 103214
+Submitted batch job 103215
+Submitted batch job 103216
+Submitted batch job 103217
+Submitted batch job 103218
+Submitted batch job 103219
+Submitted batch job 103220
+paras@watson /work/paras/code/cfq
+ % repeat 3 { sbatch --gres="gpu:1" --nodelist=luigi scripts/slurm_wandb_agent.sh }
+Submitted batch job 103221
+Submitted batch job 103222
+Submitted batch job 103223
+
+paras@watson /work/paras/code/cfq
+ % repeat 2 { sbatch --gres="gpu:1" --nodelist=luigi scripts/slurm_wandb_agent.sh }
+Submitted batch job 103224
+Submitted batch job 103225
+paras@watson /work/paras/code/cfq
+ % repeat 8 { sbatch --gres="gpu:1" --nodelist=ace scripts/slurm_wandb_agent.sh }
+Submitted batch job 103226
+Submitted batch job 103227
+Submitted batch job 103228
+Submitted batch job 103229
+Submitted batch job 103230
+Submitted batch job 103231
+Submitted batch job 103232
+Submitted batch job 103233

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cfq_wandb
+#SBATCH --job-name=cfq_train_docker
 #SBATCH --output=/home/eecs/paras/slurm/%j
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
@@ -9,12 +9,13 @@
 #SBATCH --exclude=atlas,blaze,r16,freddie
 
 # check arguments
-export NJOBS=${NJOBS:-4}
-[ -z "$SWEEPID" ] && { echo "Need to set SWEEPID"; exit 1; }
+[ -z "$FLAGFILE" ] && { echo "Need to set FLAGFILE"; exit 1; }
 
 # load dataset to data dir
 export CFQ_DIR="data/cfq"
 export DATA_CACHE="/data/$USER/data_cache/cfq"
+export RUN_CACHE="/data/$USER/data_cache/cfq_runs"
+
 [[ -d $CFQ_DIR ]] || (python scripts/download_cfq.py --data_dir $CFQ_DIR)
 mkdir -p $DATA_CACHE
 chmod 755 $DATA_CACHE
@@ -45,7 +46,8 @@ docker run --rm -t --init \
   --ipc=host \
   --user="$(id -u):$(id -g)" \
   --volume="/dev/hugepages:/dev/hugepages" \
-  --volume="$DATA_CACHE:/app/data" \
+  --volume="$DATA_CACHE:/data_cache" \
+  --volume="$RUN_CACHE:/run_cache" \
   --volume="$HOME/.netrc:/home/user/.netrc" \
   --env="PYTHONPATH=/app" \
-  cfq wandb agent --count $NJOBS $SWEEPID
+  cfq python cfq/train.py --run_dir_root=/run_cache --data_root_path=/data_cache --flagfile $FLAGFILE

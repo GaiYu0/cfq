@@ -1,0 +1,6 @@
+Dockerfile
+.git
+.vscode
+cfq.egg-info
+data/**
+wandb/**

@@ -5,3 +5,4 @@ set -x
 hostname; pwd
 eval "$(conda shell.bash hook)"
 conda env list | cut -d" " -f1 | grep "cfq" | xargs -I {} conda env remove -n {}
+conda clean -ay
