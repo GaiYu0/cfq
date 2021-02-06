@@ -14,8 +14,8 @@ import transformers
 
 # from cfq.model import AttentionModel as Model
 # from cfq.model import NounPhraseModelV2 as Model
-# from cfq.model import NounPhraseModelV3 as Model
-from cfq.model import NounPhraseModelV4 as Model
+from cfq.model import NounPhraseModelV3 as Model
+# from cfq.model import NounPhraseModelV4 as Model
 from cfq import DATA_DIR, RUN_DIR_ROOT
 from cfq.data import CFQDataModule
 
@@ -153,7 +153,10 @@ def main(argv):
     if FLAGS.resume_from_checkpoint is None:
         model = CFQTrainer(tok_vocab, tag_vocab, typ_vocab, symb_vocab)
     else:
-        ckpt = torch.load(FLAGS.resume_from_checkpoint)
+        if torch.cuda.is_available():
+            ckpt = torch.load(FLAGS.resume_from_checkpoint)
+        else:
+            ckpt = torch.load(FLAGS.resume_from_checkpoint, map_location=torch.device('cpu'))
         model = CFQTrainer.load_from_checkpoint(FLAGS.resume_from_checkpoint, tok_vocab=tok_vocab, tag_vocab=tag_vocab, typ_vocab=typ_vocab, symb_vocab=symb_vocab, last_epoch=ckpt['epoch'])
 
     # configure loggers and checkpointing

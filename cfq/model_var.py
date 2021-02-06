@@ -81,14 +81,16 @@ class NounPhraseModel(nn.Module):
         self.linear = nn.Linear(n_lay * d_h, n_var)
 
     def forward(self, seq_tag, seq_noun, seq_np, idx_np, pos_np, n_var, **kwargs):
-        h_tag, _ = self.tag_encoder(seq_tag)
+        h_tag, z_tag = self.tag_encoder(seq_tag)
+#       h_tag, _ = self.tag_encoder(seq_tag)
         h_tag = F.relu(self.tag2noun(h_tag[idx_np, pos_np]))
         h_tag = h_tag.view(-1, 2 * self.n_lay, self.d_h // 2).permute(1, 0, 2)
         _, z_noun = self.noun_encoder(seq_noun, h_tag)
         z_noun = z_noun.permute(1, 0, 2).reshape(z_noun.size(1), -1)
         z_noun = F.relu(self.noun2np(z_noun))
         _, z_np = self.np_encoder(utils.pack_as(z_noun[seq_np.data], seq_np))
-        logit = self.linear(z_np.permute(1, 0, 2).reshape(z_np.size(1), -1))
+        logit = self.linear(z_tag.permute(1, 0, 2).reshape(z_tag.size(1), -1))
+#       logit = self.linear(z_np.permute(1, 0, 2).reshape(z_np.size(1), -1))
         ret = {}
         ret["acc"] = logit.max(1)[1].eq(n_var).float().mean()
         ret["loss"] = ret["nll"] = F.cross_entropy(logit, n_var)

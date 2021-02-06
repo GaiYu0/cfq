@@ -125,7 +125,7 @@ class CFQTrainer(pl.LightningModule):
 
 
 def main(argv):
-    pl.seed_everything(FLAGS.seed)
+#   pl.seed_everything(FLAGS.seed)
     rundir_name = FLAGS.run_dir_name if FLAGS.run_dir_name is not None else FLAGS.run_name
     timestamp = str(datetime.now().strftime("%m%d%y_%H%M%S"))
     log_dir = Path(FLAGS.run_dir_root) / "{}_{}".format(rundir_name, timestamp)
