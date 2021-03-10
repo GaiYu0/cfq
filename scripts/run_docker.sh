@@ -40,7 +40,7 @@ function docker() {
 }
 
 set -x
-docker build -t cfq .
+DOCKER_BUILDKIT=1 docker build -t cfq .
 docker run --rm -t --init \
   --gpus="device=$CUDA_VISIBLE_DEVICES" \
   --ipc=host \
